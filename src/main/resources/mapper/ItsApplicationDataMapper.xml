@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.ItsApplicationDataMapper">
+    <!-- 批量 upsert，按 cmdb_id 冲突时更新 -->
+    <insert id="saveOrUpdateBatch">
+        INSERT INTO its_application_data
+        (cmdb_id, application_name, description, application_it_owner,
+        operation_owner, app_status, certification_status,
+        cmdb_update_time, cmdb_active_time, sync_batch_id,
+        operation_owner_domain, operation_owner_tower,sensitive_app,
+        create_by, create_time, update_by, update_time, delete_flag
+        )
+        VALUES
+        <foreach collection="list" item="r" separator=",">
+            (#{r.cmdbId}, #{r.applicationName}, #{r.description}, #{r.applicationItOwner},
+            #{r.operationOwner}, #{r.appStatus}, #{r.certificationStatus},
+            #{r.cmdbUpdateTime}, #{r.cmdbActiveTime}, #{syncBatchId},
+            #{r.operationOwnerDomain}, #{r.operationOwnerTower}, #{r.sensitiveApp},
+            'JOB', CURRENT_TIMESTAMP, 'JOB', CURRENT_TIMESTAMP, false
+            )
+        </foreach>
+        ON CONFLICT (cmdb_id)
+        DO UPDATE SET
+        application_name     = EXCLUDED.application_name,
+        description          = EXCLUDED.description,
+        application_it_owner = EXCLUDED.application_it_owner,
+        operation_owner      = EXCLUDED.operation_owner,
+        app_status           = EXCLUDED.app_status,
+        certification_status = EXCLUDED.certification_status,
+        cmdb_update_time     = EXCLUDED.cmdb_update_time,
+        cmdb_active_time     = EXCLUDED.cmdb_active_time,
+        sync_batch_id        = EXCLUDED.sync_batch_id,
+        operation_owner_domain = EXCLUDED.operation_owner_domain,
+        operation_owner_tower  = EXCLUDED.operation_owner_tower,
+        sensitive_app        = EXCLUDED.sensitive_app,
+        update_by            = EXCLUDED.update_by,
+        update_time          = EXCLUDED.update_time,
+        delete_flag          = false
+        ;
+    </insert>
+
+    <update id="fakeDeleteBySyncBatchId">
+        UPDATE its_application_data
+        SET delete_flag = true, update_time = CURRENT_TIMESTAMP, update_by = 'JOB'
+        WHERE sync_batch_id != #{syncBatchId}
+    </update>
+
+
+    <update id="syncLocalApplicationReadyData">
+        UPDATE its_application_data AS h
+        SET data_ready_flag = (v.cmdb_id IS NOT NULL)
+        FROM (
+            SELECT DISTINCT cmdb_id
+            FROM its_application_access_data
+            WHERE (bpo IS NOT NULL AND bpo != '')
+               OR (app_bpo IS NOT NULL AND app_bpo != '')
+        ) AS v
+        WHERE h.cmdb_id = v.cmdb_id
+          AND h.data_ready_flag = false;
+    </update>
+
+    <select id="getApplicationMenu" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT sub."label" AS label,
+               sub."label" AS value
+        FROM (
+            <if test="type == 'name'">
+                SELECT t.application_name "label"
+                FROM its_application_data t
+                WHERE t.application_name IS NOT NULL
+                    AND t.delete_flag = false
+                    <choose>
+                        <when test='dataRange.contains("*")'>
+                            <!-- 通配符，代表查询全部数据 -->
+                        </when>
+                        <otherwise>
+                            AND t.cmdb_id in (
+                            <foreach item="item" collection="dataRange" separator=",">
+                                #{item}
+                            </foreach>
+                            )
+                        </otherwise>
+                    </choose>
+                order by "label"
+            </if>
+            <if test="type == 'id'">
+                SELECT t.cmdb_id "label"
+                FROM its_application_data t
+                WHERE t.cmdb_id IS NOT NULL
+                    AND t.delete_flag = false
+                    <choose>
+                        <when test='dataRange.contains("*")'>
+                            <!-- 通配符，代表查询全部数据 -->
+                        </when>
+                        <otherwise>
+                            AND t.cmdb_id in (
+                            <foreach item="item" collection="dataRange" separator=",">
+                                #{item}
+                            </foreach>
+                            )
+                        </otherwise>
+                    </choose>
+                order by "label"
+            </if>
+        ) AS sub
+    </select>
+
+    <!--查询uar_processor权限角色-->
+    <select id="getApplicationDataByUARProcesser" resultType="com.lenovo.entity.ItsApplicationData">
+        SELECT ipd.* from its_application_data ipd
+        where 1=1
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND ipd.uar_processor ~* '\y(${bean.itCodeOfUser})\y'
+        </if>
+    </select>
+
+    <!--查询operation_owner和operation_focal权限角色-->
+    <select id="getApplicationDataByOperationOwnerOrOperationFocal" resultType="com.lenovo.entity.ItsApplicationData">
+        SELECT ipd.* from its_application_data ipd
+        where 1=1
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND (ipd.operation_owner ~* '\y(${bean.itCodeOfUser})\y' OR ipd.operation_focal ~* '\y(${bean.itCodeOfUser})\y' OR ipd.application_it_owner ~* '\y(${bean.itCodeOfUser})\y')
+        </if>
+    </select>
+
+    <update id="updateDataReadyByCmdbId">
+        UPDATE its_application_data
+        SET data_ready_flag = true, data_source = #{source}, data_source_update_time = CURRENT_TIMESTAMP
+        WHERE cmdb_id = #{cmdbId}
+    </update>
+
+    <!--根据cmdbId查询出需要发送邮件的operation_owner和uar_processor_email-->
+    <select id="getApplicationDataByCmdbIds" resultType="com.lenovo.entity.ItsApplicationData">
+        SELECT iad.* FROM its_application_data iad WHERE 1=1
+        AND iad.cmdb_id IN
+        <foreach collection="bean.cmdbId" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+
+
+
+    <select id="getDict" resultType="java.util.Map">
+        SELECT DISTINCT
+        ${col} AS label,
+        ${col} AS value
+        FROM its_application_data
+        WHERE delete_flag = false
+            AND ${col} IS NOT NULL
+        ORDER BY ${col} DESC
+    </select>
+
+    <!--获取最新的周期名称-->
+    <select id="queryUarNameLatest" resultType="com.lenovo.bean.ApplicationCycleInfoBean">
+            SELECT * FROM uar_cycle_maintenance
+            WHERE cmdb_id IN
+            <foreach collection="bean.cmdbId" item="seq" open="(" separator="," close=")">
+                #{seq}
+            </foreach>
+            ORDER BY id DESC
+            LIMIT 1
+    </select>
+
+    <select id="findByCmdbId" resultType="com.lenovo.entity.ItsApplicationData">
+        SELECT * FROM its_application_data
+        WHERE cmdb_id = #{cmdbId}
+    </select>
+
+    <select id="getFocal" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub."label" AS label,
+            sub."value" AS value
+        FROM (
+            SELECT distinct
+                t.operation_focal "label",
+                t.operation_focal "value"
+            FROM its_application_data t
+            <where>
+                t.operation_focal IS NOT NULL AND t.operation_focal !=''
+                <choose>
+                    <when test='dataRange.contains("*")'>
+                        <!-- 通配符，代表查询全部数据 -->
+                    </when>
+                    <otherwise>
+                        AND t.cmdb_id in (
+                        <foreach item="item" collection="dataRange" separator=",">
+                            #{item}
+                        </foreach>
+                        )
+                    </otherwise>
+                </choose>
+            </where>
+            order by "label"
+        ) AS sub
+    </select>
+
+    <select id="getSAndAEmailsByCmdbIds" resultType="java.lang.String">
+        SELECT email FROM ad_tb_upp_nature_2 WHERE user_name IN
+        (
+            SELECT
+            -- 优先取 focal，没有则取 owner
+            COALESCE(NULLIF(TRIM(operation_focal), ''), operation_owner) AS final_owner
+            FROM its_application_data where cmdb_id IN
+            <foreach collection="bean.cmdbId" item="seq" open="(" separator="," close=")">
+                #{seq}
+            </foreach>
+        )
+    </select>
+
+    <select id="getSelectorOptions" resultType="com.lenovo.bean.AdvancedSearchBean">
+        <!-- scopeSql 和 fieldName 均由后端枚举白名单生成 -->
+        SELECT distinct
+            t.${fieldName} "label",
+            t.${fieldName} "value"
+        FROM its_application_data t
+        <where>
+            t.${fieldName} IS NOT NULL AND t.${fieldName} !=''
+            <!-- 基础权限范围 -->
+            <choose>
+                <!-- 通配符，查询全部的应用 -->
+                <when test='dataRange.contains("*")'>
+                    <if test="filterOnlineApplications">
+                        AND t.cmdb_id in (
+                            select distinct cmdb_id from its_application_data where online_time is not null
+                        )
+                    </if>
+                </when>
+                <otherwise>
+                    AND t.cmdb_id in (
+                    <foreach item="item" collection="dataRange" separator=",">
+                        #{item}
+                    </foreach>
+                    )
+                </otherwise>
+            </choose>
+            <if test="scopeSql != null and scopeSql != ''">
+                AND t.cmdb_id in (${scopeSql})
+            </if>
+        </where>
+        order by "label"
+    </select>
+
+</mapper>

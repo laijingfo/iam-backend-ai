@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.AutoMailSendLineManagerTempMapper">
+
+    <!-- 直属经理自动邮件发送临时表的主要结果映射 -->
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.AutoMailSendLineManagerTemp" autoMapping="false">
+        <id column="id" property="id" jdbcType="BIGINT"/>
+        <!-- 普通字段映射 -->
+        <result column="line_manager" property="lineManager" jdbcType="VARCHAR"/>
+        <result column="line_manager_email" property="lineManagerEmail" jdbcType="VARCHAR"/>
+        <result column="to_email" property="toEmail" jdbcType="VARCHAR"/>
+        <result column="cmdb_id" property="cmdbId" jdbcType="VARCHAR"/>
+        <result column="subject" property="subject" jdbcType="VARCHAR"/>
+        <result column="content" property="content" jdbcType="VARCHAR"/>
+        <result column="app_name_number" property="appNameNumber" jdbcType="VARCHAR"/>
+        <result column="app_name_list" property="appNameList" jdbcType="VARCHAR"/>
+        <result column="it_code_user_number" property="itCodeUserNumber" jdbcType="VARCHAR"/>
+        <result column="it_code_user_name_list" property="itCodeUserNameList" jdbcType="VARCHAR"/>
+        <result column="review_number" property="reviewNumber" jdbcType="VARCHAR"/>
+        <result column="review_number_name_list" property="reviewNumberNameList" jdbcType="VARCHAR"/>
+        <result column="status" property="status" jdbcType="SMALLINT"/>
+        <result column="process_node" property="processNode"/>
+        <result column="process_time" property="processTime"/>
+        <result column="retry_count" property="retryCount"/>
+        <result column="timeout" property="timeout" jdbcType="INTEGER"/>
+        <result column="create_time" property="createTime" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <!-- 通用查询列（所有字段），可复用 -->
+    <sql id="Base_Column_List">
+        id, line_manager, line_manager_email, to_email, cmdb_id, subject, content,
+        app_name_number, app_name_list, it_code_user_number, it_code_user_name_list,
+        review_number, review_number_name_list, status, process_node, process_time,
+        retry_count, timeout, create_time
+    </sql>
+
+    <!-- 1. 新增数据（主键自增，无需传入id） -->
+    <insert id="insert" parameterType="com.lenovo.entity.AutoMailSendLineManagerTemp" useGeneratedKeys="true" keyProperty="id" keyColumn="id">
+        INSERT INTO auto_mail_send_lineManager_temp
+        (
+            line_manager, line_manager_email, to_email, cmdb_id, subject, content,
+            app_name_number, app_name_list, it_code_user_number, it_code_user_name_list,
+            review_number, review_number_name_list, status, process_node, process_time,
+            retry_count, timeout, create_time
+        )
+        VALUES
+        (
+             #{lineManager, jdbcType=VARCHAR},
+             #{lineManagerEmail, jdbcType=VARCHAR},
+             #{toEmail, jdbcType=VARCHAR},
+             #{cmdbId, jdbcType=VARCHAR},
+             #{subject, jdbcType=VARCHAR},
+             #{content, jdbcType=VARCHAR},
+             #{appNameNumber, jdbcType=VARCHAR},
+             #{appNameList, jdbcType=VARCHAR},
+             #{itCodeUserNumber, jdbcType=VARCHAR},
+             #{itCodeUserNameList, jdbcType=VARCHAR},
+             #{reviewNumber, jdbcType=VARCHAR},
+             #{reviewNumberNameList, jdbcType=VARCHAR},
+             #{status, jdbcType=SMALLINT},
+             #{processNode, jdbcType=VARCHAR},
+             #{processTime, jdbcType=TIMESTAMP},
+             #{retryCount, jdbcType=SMALLINT},
+             #{timeout, jdbcType=INTEGER},
+             #{createTime, jdbcType=TIMESTAMP}
+        )
+    </insert>
+
+    <!-- 2. 批量新增（高效插入多条数据） -->
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO auto_mail_send_lineManager_temp
+        (
+            line_manager, line_manager_email, to_email, cmdb_id, subject, content,
+            app_name_number, app_name_list, it_code_user_number, it_code_user_name_list,
+            review_number, review_number_name_list, status, process_node, process_time,
+            retry_count, timeout, create_time
+        )
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+        (
+            #{item.lineManager, jdbcType=VARCHAR},
+            #{item.lineManagerEmail, jdbcType=VARCHAR},
+            #{item.toEmail, jdbcType=VARCHAR},
+            #{item.cmdbId, jdbcType=VARCHAR},
+            #{item.subject, jdbcType=VARCHAR},
+            #{item.content, jdbcType=VARCHAR},
+            #{item.appNameNumber, jdbcType=VARCHAR},
+            #{item.appNameList, jdbcType=VARCHAR},
+            #{item.itCodeUserNumber, jdbcType=VARCHAR},
+            #{item.itCodeUserNameList, jdbcType=VARCHAR},
+            #{item.reviewNumber, jdbcType=VARCHAR},
+            #{item.reviewNumberNameList, jdbcType=VARCHAR},
+            #{item.status, jdbcType=SMALLINT},
+            #{item.processNode, jdbcType=VARCHAR},
+            #{item.processTime, jdbcType=TIMESTAMP},
+            #{item.retryCount, jdbcType=SMALLINT},
+            #{item.timeout, jdbcType=INTEGER},
+            #{item.createTime, jdbcType=TIMESTAMP}
+        )
+        </foreach>
+    </insert>
+
+    <insert id="batchInsertBpo" parameterType="java.util.List">
+        INSERT INTO auto_mail_send_bpo_temp
+        (
+            bpo, bpo_email, bpo_band_ed_flag, to_email, cmdb_id, subject, content,
+            app_name_number, app_name_list, it_code_user_number, it_code_user_name_list,
+            review_number, review_number_name_list, status, process_node, process_time,
+            retry_count, timeout, create_time
+        )
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+        (
+            #{item.bpo, jdbcType=VARCHAR},
+            #{item.bpoEmail, jdbcType=VARCHAR},
+            #{item.bpoBandEdFlag, jdbcType=VARCHAR},
+            #{item.toEmail, jdbcType=VARCHAR},
+            #{item.cmdbId, jdbcType=VARCHAR},
+            #{item.subject, jdbcType=VARCHAR},
+            #{item.content, jdbcType=VARCHAR},
+            #{item.appNameNumber, jdbcType=VARCHAR},
+            #{item.appNameList, jdbcType=VARCHAR},
+            #{item.itCodeUserNumber, jdbcType=VARCHAR},
+            #{item.itCodeUserNameList, jdbcType=VARCHAR},
+            #{item.reviewNumber, jdbcType=VARCHAR},
+            #{item.reviewNumberNameList, jdbcType=VARCHAR},
+            #{item.status, jdbcType=SMALLINT},
+            #{item.processNode, jdbcType=VARCHAR},
+            #{item.processTime, jdbcType=TIMESTAMP},
+            #{item.retryCount, jdbcType=SMALLINT},
+            #{item.timeout, jdbcType=INTEGER},
+            #{item.createTime, jdbcType=TIMESTAMP}
+        )
+        </foreach>
+    </insert>
+
+    <!-- 3. 根据主键ID查询单条数据 -->
+    <select id="selectById" parameterType="java.lang.Long" resultType="com.lenovo.entity.AutoMailSendLineManagerTemp">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM auto_mail_send_lineManager_temp
+        WHERE id = #{id, jdbcType=BIGINT}
+    </select>
+
+    <!-- 4. 根据状态查询数据（常用业务场景：查询待发送/发送失败的邮件） -->
+    <select id="selectListByStatus" parameterType="java.lang.Integer" resultType="com.lenovo.entity.AutoMailSendLineManagerTemp">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM auto_mail_send_lineManager_temp
+        WHERE status = #{status, jdbcType=SMALLINT}
+        ORDER BY create_time ASC
+    </select>
+
+    <!-- 5. 更新数据（根据主键更新所有非空字段） -->
+    <update id="updateById" parameterType="com.lenovo.entity.AutoMailSendLineManagerTemp">
+        UPDATE auto_mail_send_lineManager_temp
+        <set>
+            <if test="lineManager != null and lineManager != ''">
+                line_manager = #{lineManager, jdbcType=VARCHAR},
+            </if>
+            <if test="lineManagerEmail != null and lineManagerEmail != ''">
+                line_manager_email = #{lineManagerEmail, jdbcType=VARCHAR},
+            </if>
+            <if test="toEmail != null and toEmail != ''">
+                to_email = #{toEmail, jdbcType=VARCHAR},
+            </if>
+            <if test="cmdbId != null and cmdbId != ''">
+                cmdb_id = #{cmdbId, jdbcType=VARCHAR},
+            </if>
+            <if test="subject != null and subject != ''">
+                subject = #{subject, jdbcType=VARCHAR},
+            </if>
+            <if test="content != null and content != ''">
+                content = #{content, jdbcType=VARCHAR},
+            </if>
+            <if test="appNameNumber != null and appNameNumber != ''">
+                app_name_number = #{appNameNumber, jdbcType=VARCHAR},
+            </if>
+            <if test="appNameList != null and appNameList != ''">
+                app_name_list = #{appNameList, jdbcType=VARCHAR},
+            </if>
+            <if test="itCodeUserNumber != null and itCodeUserNumber != ''">
+                it_code_user_number = #{itCodeUserNumber, jdbcType=VARCHAR},
+            </if>
+            <if test="itCodeUserNameList != null and itCodeUserNameList != ''">
+                it_code_user_name_list = #{itCodeUserNameList, jdbcType=VARCHAR},
+            </if>
+            <if test="reviewNumber != null and reviewNumber != ''">
+                review_number = #{reviewNumber, jdbcType=VARCHAR},
+            </if>
+            <if test="reviewNumberNameList != null and reviewNumberNameList != ''">
+                review_number_name_list = #{reviewNumberNameList, jdbcType=VARCHAR},
+            </if>
+            <if test="status != null">
+                status = #{status, jdbcType=SMALLINT},
+            </if>
+            <if test="processNode != null and processNode != ''">
+                process_node = #{processNode, jdbcType=VARCHAR},
+            </if>
+            <if test="processTime != null">
+                process_time = #{processTime, jdbcType=TIMESTAMP},
+            </if>
+            <if test="retryCount != null">
+                retry_count = #{retryCount, jdbcType=SMALLINT},
+            </if>
+            <if test="timeout != null">
+                timeout = #{timeout, jdbcType=INTEGER},
+            </if>
+            <if test="createTime != null">
+                create_time = #{createTime, jdbcType=TIMESTAMP},
+            </if>
+        </set>
+        WHERE id = #{id, jdbcType=BIGINT}
+    </update>
+
+    <!-- 6. 批量更新邮件状态（常用业务场景：批量标记为发送中/发送成功） -->
+    <update id="batchUpdateStatus" parameterType="java.util.Map">
+        UPDATE auto_mail_send_lineManager_temp
+        SET status = #{status, jdbcType=SMALLINT}
+        WHERE id IN
+        <foreach collection="idList" item="id" open="(" separator="," close=")">
+            #{id, jdbcType=BIGINT}
+        </foreach>
+    </update>
+
+    <!-- 7. 根据主键ID删除数据（物理删除） -->
+    <delete id="deleteById" parameterType="java.lang.Long">
+        DELETE FROM auto_mail_send_lineManager_temp
+        WHERE id = #{id, jdbcType=BIGINT}
+    </delete>
+
+    <!-- 8. 批量删除数据 -->
+    <delete id="batchDeleteByIds" parameterType="java.util.List">
+        DELETE FROM auto_mail_send_lineManager_temp
+        WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id, jdbcType=BIGINT}
+        </foreach>
+    </delete>
+
+    <!-- 9. 获取要发送邮件的lineManager的数据 -->
+    <select id="getLinaManagerSendData" resultType="com.lenovo.entity.AutoMailSendLineManagerTemp">
+        SELECT
+            count(DISTINCT app_name) AS app_name_number,
+            STRING_AGG(DISTINCT uart.app_name, ',') AS app_name_list,
+            uart.line_manager AS line_manager,
+            MAX(uart.line_manager_email) AS line_manager_email,
+            MAX(uart.line_manager_email) AS to_email,
+            count(DISTINCT uart.it_code_of_user) AS it_code_user_number,
+            STRING_AGG(DISTINCT uart.it_code_of_user, ',') AS it_code_user_name_list,
+            STRING_AGG(DISTINCT uart.cmdb_id, ',') AS cmdb_id
+        FROM user_access_review uart
+        WHERE uart.delete_flag = false
+          AND COALESCE(uart.line_manager_review_status, '') != '2'
+          AND COALESCE(uart.line_manager_band_ed_flag, '') != '1'
+        GROUP BY uart.line_manager;
+    </select>
+
+    <!-- 10. 获取要发送邮件的BPO的数据 -->
+    <select id="getBpoSendData" resultType="com.lenovo.entity.AutoMailSendBpoTemp">
+        SELECT
+            count(DISTINCT uart.app_name) AS app_name_number,
+            STRING_AGG(DISTINCT uart.app_name, ',') AS app_name_list,
+            uart.bpo AS bpo,
+            MAX(uart.bpo_band_ed_flag) AS bpo_band_ed_flag,
+            MAX(uart.bpo_email) AS bpo_email,
+            MAX(uart.bpo_email) AS to_email,
+            count(DISTINCT uart.it_code_of_user) AS it_code_user_number,
+            STRING_AGG(DISTINCT uart.it_code_of_user, ',') AS it_code_user_name_list,
+            STRING_AGG(DISTINCT uart.cmdb_id, ',') AS cmdb_id
+        FROM user_access_review uart
+        WHERE uart.delete_flag = false
+          AND COALESCE(uart.bpo_review_status, '') != '2'
+        GROUP BY uart.bpo;
+    </select>
+
+</mapper>

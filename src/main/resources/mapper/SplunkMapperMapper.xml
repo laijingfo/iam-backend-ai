@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.SplunkMapper">
+
+  <delete id="deleteAdAccount">
+    delete from ad_account_from_splunk
+  </delete>
+
+  <insert id="saveAllAdAccountFromSplunk" parameterType="java.util.List">
+    insert into ad_account_from_splunk (
+    itcode
+    )
+    values
+    <foreach collection="list" item="item" index="index" separator=",">
+      (
+      #{item.itcode}
+      )
+    </foreach>
+  </insert>
+
+
+  <delete id="deleteApplication">
+    delete from its_application_data
+    where fiscal_year = 'FY2324' and quarter = 'Q2' and remark = 'splunkData'
+  </delete>
+
+  <insert id="saveCmdbApplicationListFromSplunk" parameterType="java.util.List">
+    insert into its_application_data (
+    application_id,
+    application_name,
+    description,
+    application_it_owner,
+    application_owner_tower,
+    application_owner_domain,
+    app_status,
+    certification_status,
+    fiscal_year,
+    quarter,
+    remark
+    )
+    values
+    <foreach collection="list" item="item" index="index" separator=",">
+      (
+      #{item.ApplicationID},
+      #{item.ApplicationName},
+      #{item.Description},
+      #{item.Application IT Owner},
+      #{item.Application Owner Tower},
+      #{item.Application Owner Domain},
+      #{item.Current Status},
+      <![CDATA[
+      #{item.Registration & Certification Status}
+      ]]>,
+      'FY2324',
+      'Q2',
+      'splunkData'
+      )
+    </foreach>
+  </insert>
+
+  <select id="getAllItcode" resultType="java.lang.String">
+    select itcode from ad_account_from_splunk
+  </select>
+
+
+</mapper>

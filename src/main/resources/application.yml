@@ -1,0 +1,25 @@
+spring:
+  profiles:
+    active: @spring.profiles.active@
+  messages:
+    basename: i18n/messages  # 资源文件基础路径
+    encoding: UTF-8
+    fallback-to-system-locale: false  # 找不到时回退到默认，不依赖系统语言
+    always-use-message-format: false
+server:
+  max-http-request-header-size: 32KB
+
+mail:
+  smtp:
+    host: smtpinternal.lenovo.com
+    port: 25
+    starttls:
+      enable: false
+    auth: ${MAIL_AUTH:false}
+    ssl:
+      trust: smtpinternal.lenovo.com
+  socketFactory:
+    port: 25
+    fallback: true
+  transport:
+    protocol: smtp

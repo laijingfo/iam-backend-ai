@@ -1,0 +1,352 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.PreSendMailMapper">
+
+
+    <sql id="Base_Conditions">
+        <choose>
+            <when test="request.isALL">
+                <if test="request.filters.cmdbId != null and request.filters.cmdbId != ''">
+                    and uar.cmdb_id = #{request.filters.cmdbId}
+                </if>
+                <if test="request.filters.appName != null and request.filters.appName != ''">
+                    AND EXISTS (
+                        SELECT 1
+                        FROM its_application_data app
+                        WHERE app.cmdb_id = uar.cmdb_id
+                        AND app.application_name = #{request.filters.appName}
+                    )
+                </if>
+                <if test="request.filters.itCodeOfUser != null and request.filters.itCodeOfUser != ''">
+                    and uar.it_code_of_user = #{request.filters.itCodeOfUser}
+                </if>
+                <if test="request.filters.systemRole != null and request.filters.systemRole != ''">
+                    and lower(uar.system_role) like '%'||lower(#{request.filters.systemRole})||'%'
+                </if>
+                <if test="request.filters.accessLabel != null and request.filters.accessLabel != ''">
+                    and uar.access_label = #{request.filters.accessLabel}
+                </if>
+                <if test="request.filters.lineManager != null and request.filters.lineManager != ''">
+                    and uar.line_manager = #{request.filters.lineManager}
+                </if>
+                <if test="request.filters.lineManagerLevelCode != null and request.filters.lineManagerLevelCode != ''">
+                    and uar.line_manager_level_code = #{request.filters.lineManagerLevelCode}
+                </if>
+                <if test="request.filters.lineManagerReviewStatus != null and request.filters.lineManagerReviewStatus != ''">
+                    and uar.line_manager_review_status = #{request.filters.lineManagerReviewStatus}
+                </if>
+                <if test="request.filters.lineManagersReviewDecision != null and request.filters.lineManagersReviewDecision != ''">
+                    and uar.line_managers_review_decision = #{request.filters.lineManagersReviewDecision}
+                </if>
+                <if test="request.filters.dept != null and request.filters.dept != ''">
+                    AND uar.dept like '%'||#{request.filters.dept}||'%'
+                </if>
+                <if test="request.filters.bpo != null and request.filters.bpo != ''">
+                    and uar.bpo ~* '\y(${request.filters.bpo})\y'
+                </if>
+                <if test="request.filters.bpoReviewStatus != null and request.filters.bpoReviewStatus != ''">
+                    and uar.bpo_review_status = #{request.filters.bpoReviewStatus}
+                </if>
+                <if test="request.filters.bpoReviewDecision != null and request.filters.bpoReviewDecision != ''">
+                    and uar.bpo_review_decision = #{request.filters.bpoReviewDecision}
+                </if>
+            </when>
+            <otherwise>
+                and uar.sequence_number in
+                <foreach item="item" collection="request.sequenceNumbers" separator="," open="(" close=")">
+                    #{item}
+                </foreach>
+            </otherwise>
+        </choose>
+    </sql>
+
+    <delete id="clearLmPreSendList">
+        truncate table pre_send_for_lm
+    </delete>
+
+    <update id="buildLmPreSendList" >
+        INSERT INTO pre_send_for_lm(recipient,recipient_email,cc,cc_email)
+        SELECT
+            lower(uar.line_manager) as recipient,
+            lower(lm.email) as recipient_email,
+            string_agg(distinct lower(uar.it_code_of_user), ',') as cc,
+            string_agg(distinct u.email, ',') as cc_email
+        FROM user_access_review uar
+        LEFT JOIN ad_tb_upp_nature_2 lm on uar.line_manager = lm.user_name
+        LEFT JOIN ad_tb_upp_nature_2 u on uar.it_code_of_user = u.user_name
+        <where>
+            lm.band_flag = '0'
+            AND uar.line_manager_review_status='1'
+            AND uar.delete_flag = '0'
+            AND u.email != '' AND u.email is not null
+            <include refid="Base_Conditions"/>
+        </where>
+        GROUP BY lower(uar.line_manager),lower(lm.email)
+    </update>
+
+
+    <update id="buildLmDelegateList">
+        INSERT INTO
+            pre_send_for_lm (recipient,recipient_email,cc,cc_email,data_source)
+        SELECT
+            d.delegatee,
+            u.email,
+            pre.cc,
+            pre.cc_email,
+            d.delegator
+        FROM pre_send_for_lm pre
+        JOIN delegation d
+            ON pre.recipient = d.delegator
+            AND d.delegation_scope = 'Line_Manager'
+            AND d.delegation_start_date &lt;= current_date
+            AND d.delegation_end_date &gt;= current_date
+        LEFT JOIN ad_tb_upp_nature_2 u ON d.delegatee = u.user_name
+        WHERE u.band_flag='0';
+    </update>
+
+    <select id="getPreSendLmCount" resultType="java.lang.Long">
+        SELECT
+            count(*)
+        FROM pre_send_for_lm;
+    </select>
+
+    <select id="getPreSendLmList" resultType="com.lenovo.bean.PreSendBean">
+        SELECT
+            pre.id,
+            pre.recipient AS to,
+            pre.recipient_email AS toEmail,
+            pre.cc AS cc,
+            pre.cc_email AS ccEmail
+        FROM pre_send_for_lm pre
+    </select>
+
+    <delete id="removePreSendLmById">
+        DELETE FROM
+            pre_send_for_lm
+        WHERE
+            id = #{id}
+    </delete>
+
+    <delete id="clearUserWillRemoveList">
+        truncate table pre_send_for_user_will_remove
+    </delete>
+
+    <update id="buildUserWillRemoveList">
+        INSERT INTO
+            pre_send_for_user_will_remove (recipient, recipient_email)
+        SELECT
+            lower(uar.it_code_of_user) AS recipient,
+            lower(u.email) AS recipient_email
+        FROM
+        user_access_review uar
+        LEFT JOIN ad_tb_upp_nature_2 u ON uar.it_code_of_user = u.user_name
+        <where>
+            u.band_flag = '0'
+            AND uar.line_manager not in(
+                select user_name from
+                ad_tb_upp_nature_2 where band_flag = '1'
+            )
+            AND ( uar.line_managers_review_decision = 'remove' OR uar.bpo_review_decision = 'remove' )
+            AND uar.delete_flag = '0'
+            AND u.email IS NOT NULL
+            AND u.email != ''
+        </where>
+        GROUP BY lower(uar.it_code_of_user), lower(u.email);
+    </update>
+
+    <select id="getPreSendUserWillRemoveCount" resultType="java.lang.Long">
+        SELECT
+            count(*)
+        FROM pre_send_for_user_will_remove;
+    </select>
+
+    <select id="getPreSendUserWillRemoveList" resultType="com.lenovo.bean.PreSendBean">
+        SELECT
+            pre.id,
+            pre.recipient AS to,
+            pre.recipient_email AS toEmail
+        FROM pre_send_for_user_will_remove pre
+    </select>
+
+    <delete id="removePreSendUserWillRemoveById">
+        DELETE FROM
+            pre_send_for_user_will_remove
+        WHERE
+            id = #{id}
+    </delete>
+
+
+    <delete id="clearBPOPreList">
+        truncate table pre_send_for_bpo
+    </delete>
+
+    <update id="buildBPOPreList">
+        WITH bpo_info AS (
+            SELECT
+                bpo_arr[ord] AS bpo,
+                NULLIF(bpo_email_arr[ord], '') AS bpo_email
+            FROM user_access_review uar,
+            LATERAL (SELECT
+                string_to_array(lower(uar.bpo), ';') AS bpo_arr,
+                string_to_array(lower(uar.bpo_email), ';') AS bpo_email_arr
+            ) parsed,
+            LATERAL generate_series(
+                1,
+                GREATEST(
+                    array_length(parsed.bpo_arr, 1),
+                    array_length(parsed.bpo_email_arr, 1)
+                )
+            ) AS t(ord)
+            WHERE
+                uar.bpo_review_status = '1'
+                AND uar.delete_flag = '0'
+                AND parsed.bpo_arr[ord] IS NOT NULL
+                <include refid="Base_Conditions"/>
+        )
+        INSERT INTO pre_send_for_bpo (recipient, recipient_email)
+        SELECT
+            b.bpo,
+            COALESCE(MAX(b.bpo_email), p.email) AS email
+        FROM bpo_info b
+        LEFT JOIN ad_tb_upp_nature_2 p ON p.user_name = b.bpo
+        GROUP BY b.bpo, p.email;
+    </update>
+
+    <update id="buildBpoDelegateList">
+        INSERT INTO
+            pre_send_for_bpo (recipient, recipient_email, data_source)
+        SELECT DISTINCT
+            d.delegatee,
+            u.email,
+            d.delegator
+        FROM pre_send_for_bpo pre
+        JOIN delegation d
+            ON pre.recipient = d.delegator
+            AND d.delegation_scope = 'BPO'
+            AND d.delegation_start_date &lt;= current_date
+            AND d.delegation_end_date &gt;= current_date
+        LEFT JOIN ad_tb_upp_nature_2 u ON d.delegatee = u.user_name
+        WHERE u.band_flag='0'
+        ON CONFLICT (recipient) DO NOTHING;
+    </update>
+
+    <select id="getPreSendBpoCount" resultType="long">
+        SELECT
+            count(*)
+        FROM
+            pre_send_for_bpo
+    </select>
+
+    <select id="getPreSendBpoList" resultType="com.lenovo.bean.PreSendBean">
+        SELECT
+            id,
+            recipient AS to,
+            recipient_email AS toEmail
+        FROM
+            pre_send_for_bpo
+    </select>
+
+    <delete id="removePreSendBpoById">
+        DELETE FROM
+            pre_send_for_bpo
+        WHERE
+            id = #{id}
+    </delete>
+
+    <delete id="clearReminderUserPreSendList">
+        truncate table pre_send_for_reminder_user
+    </delete>
+
+    <update id="buildReminderUserPreSendList">
+        INSERT INTO
+            pre_send_for_reminder_user(recipient, recipient_email)
+        select
+            distinct lower(atun.user_name),lower(atun.email)
+        from
+            user_access_review uar
+            left join ad_tb_upp_nature_2 atun on lower(uar.it_code_of_user) = lower(atun.user_name)
+        where
+            (line_manager_review_status = '1' or bpo_review_status = '1' )
+            and atun.band_flag = '0'
+            and uar.line_manager not in(
+                select user_name from
+                ad_tb_upp_nature_2 where band_flag = '1'
+            )
+            and atun.email is not null
+            and atun.email != ''
+            and uar.delete_flag = '0'
+    </update>
+
+    <select id="getPreSendReminderUserCount" resultType="java.lang.Long">
+        SELECT
+            count(*)
+        FROM
+            pre_send_for_reminder_user
+    </select>
+
+    <select id="getPreSendReminderUserList" resultType="com.lenovo.bean.PreSendBean">
+        SELECT
+            id,
+            recipient AS to,
+            recipient_email AS toEmail
+        FROM
+            pre_send_for_reminder_user
+    </select>
+
+    <delete id="removePreSendReminderUserById">
+        DELETE FROM
+            pre_send_for_reminder_user
+        WHERE
+            id = #{id}
+    </delete>
+
+
+    <delete id="clearFinalRemoveUserPreSendList">
+        truncate table pre_send_for_final_remove
+    </delete>
+
+    <update id="buildFinalRemoveUserPreSendList">
+        WITH target_users AS (
+            SELECT DISTINCT
+                LOWER(TRIM(uar.it_code_of_user)) AS recipient,
+                LOWER(TRIM(ad.email)) AS recipient_email
+            FROM user_access_review uar
+            INNER JOIN ad_tb_upp_nature_2 ad
+                ON LOWER(TRIM(uar.it_code_of_user)) = LOWER(TRIM(ad.user_name))
+            <where>
+                uar.final_review_decision = 'remove'
+                AND uar.delete_flag = '0'
+                AND ad.band_flag = '0'
+                AND ad.email IS NOT NULL
+                AND ad.email != ''
+            </where>
+        )
+        INSERT INTO pre_send_for_final_remove (recipient, recipient_email)
+            SELECT recipient, recipient_email
+            FROM target_users
+    </update>
+
+    <select id="getPreSendFinalRemoveUserCount" resultType="java.lang.Long">
+        SELECT
+            count(*)
+        FROM pre_send_for_final_remove;
+    </select>
+
+    <select id="getPreSendFinalRemoveUserList" resultType="com.lenovo.bean.PreSendBean">
+        SELECT
+            pre.id,
+            LOWER(pre.recipient) AS to,
+            pre.recipient_email AS toEmail
+        FROM pre_send_for_final_remove pre
+    </select>
+
+    <delete id="removePreSendFinalRemoveUserById">
+        DELETE FROM
+            pre_send_for_final_remove
+        WHERE
+            id = #{id}
+    </delete>
+
+</mapper>

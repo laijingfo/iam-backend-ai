@@ -1,0 +1,381 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.RoleMapper">
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.Role">
+        <result column="id" property="id"/>
+        <result column="name" property="name"/>
+        <result column="description" property="description"/>
+        <result column="status" property="status"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+        <result column="delete" property="delete"/>
+        <result column="users" property="users"/>
+        <result column="internal" property="internal"/>
+        <result column="workspace_id" property="workspaceId"/>
+        <result column="menu_keys" property="menuKeys"/>
+        <result column="is_admin" property="isAdmin"/>
+        <collection property="roleMenuBeans" select="findRoleByRoleId"
+                    column="id" ofType="com.lenovo.bean.UserMenuBean"/>
+        <collection property="organizeItem" select="findOrganizeItem"
+                    column="id" ofType="java.lang.String"/>
+    </resultMap>
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        <trim suffixOverrides=",">
+            id as id,
+            name as name,
+            description as description,
+            status as status,
+            create_time as createTime,
+            update_time as updateTime,
+            delete as delete,
+            internal as internal,
+            workspace_id as workspaceId,
+            menu_keys as menuKeys,
+            is_admin as isAdmin
+        </trim>
+    </sql>
+    <insert id="create" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_role
+        ("name", description, status, create_time, update_time, "delete", workspace_id, menu_keys, is_admin)
+        VALUES (#{item.name}, #{item.description}, true, now(), now(), false, #{item.workspaceId}, #{item.menuKeys},false);
+    </insert>
+    <insert id="addUserRole">
+        INSERT INTO sys_user_roles(user_id,role_id) values
+        <foreach collection="user.roles" item="item" separator=",">
+            (#{user.id},#{item})
+        </foreach>
+    </insert>
+
+    <!--用户管理:新增和修改-->
+    <insert id="addAFDFSUserRole">
+        INSERT INTO sys_user_roles(user_id,role_id,type,create_by) values
+        <foreach collection="user.roleSet" item="item" separator=",">
+            (#{user.id},#{item},'ADFS',#{user.currentLoggedUserItCode})
+        </foreach>
+    </insert>
+
+    <insert id="addRoleMenus">
+        INSERT INTO sys_role_menu(role_id,read_write,menu_id,checked) values
+        <foreach collection="menus" item="item" separator=",">
+            (${roleId},#{item.readAndWrite} ,${item.menuId},${item.checked})
+        </foreach>
+    </insert>
+    <insert id="addRoleUser">
+        INSERT INTO sys_user_roles(user_id,role_id,"type") values
+        <foreach collection="user" item="item" separator=",">
+            (#{item.id},#{roleId},#{item.type})
+        </foreach>
+    </insert>
+    <insert id="saveOrganize">
+        INSERT INTO sys_organize(society_id,cost) values
+        <foreach collection="organizeItem" item="item" separator=",">
+            (#{roleId},#{item})
+        </foreach>
+    </insert>
+
+
+    <!--逻辑删除暂时不要-->
+    <update id="deleteById">
+        UPDATE sys_role
+        SET "delete"= true
+        where id = #{id}
+        and internal = false
+    </update>
+    <!--直接删除-->
+    <delete id="deleteByIdTrue">
+        delete
+        from sys_role
+        where id = #{id}
+    </delete>
+
+    <delete id="delUserRole">
+        delete
+        from sys_user_roles
+        where user_id = #{id}
+    </delete>
+    <delete id="delADFSUserRole">
+        delete
+        from sys_user_roles
+        where user_id = #{id}
+          and type = 'ADFS'
+    </delete>
+
+    <delete id="delRoleMenus">
+        delete
+        from sys_role_menu
+        where role_id = #{roleId}
+    </delete>
+
+    <delete id="delRoleUser">
+        delete
+        from sys_user_roles
+        where role_id = #{roleId}
+    </delete>
+    <delete id="deleteOrganizeBySocietyId">
+        delete
+        from sys_organize
+        where society_id = #{societyId}
+    </delete>
+    <delete id="deleteByWorkspaceId">
+        delete
+        from sys_role
+        where workspace_id = #{workspaceId}
+    </delete>
+
+    <select id="findOrganizeItem" resultType="java.lang.String">
+        select distinct cost
+        from sys_organize
+        where society_id = #{id}
+    </select>
+
+    <select id="findRoleByRoleId" resultType="com.lenovo.bean.UserMenuBean">
+        with recursive tmp as (select mr.parent_id
+                               from menu_router mr,
+                                    sys_role_menu srm
+                               where mr.id = srm.menu_id
+                                 and srm.checked = true
+                                 and srm.role_id = #{id}
+                               union all
+                               select mr.parent_id
+                               from menu_router mr,
+                                    tmp
+                               where mr.id = tmp.parent_id
+                                 and mr.parent_id is not null)
+        select mr.menu_key             as menuKey,
+               mr.id                   as menuId,
+               mr.parent_id            as parentId,
+               COALESCE(mr."level", 0) as level,
+               srm.checked,
+               mr.icon,
+               mr.show,
+               mr."rank"
+        from sys_role_menu srm,
+             menu_router mr
+        where (srm.menu_id in (select parent_id from tmp) or srm.checked = true)
+          and srm.menu_id = mr.id
+          and srm.role_id = #{id}
+
+
+    </select>
+
+    <select id="selectByPage" resultMap="BaseResultMap">
+
+        select (
+        select array_to_string(ARRAY(SELECT unnest(array_agg( distinct t.user_name))),',') from (
+        select su.user_name from sys_user su
+        left join sys_user_roles sur on su.id::VARCHAR = sur.user_id and su.delete = false and su.status = true and
+        sur."type" = 'Cybertron'
+        where sur.role_id = sr.id
+        union all
+        select su.user_name from ad_tb_upp_nature_2 su
+        left join sys_user_roles sur on su.user_name = sur.user_id and sur."type" = 'ADFS'
+        where sur.role_id = sr.id
+        ) as t
+        ) as users,
+        sr.id as id,
+        sr.name as name,
+        sr.description as description,
+        sr.status as status,
+        to_char( sr.create_time AT TIME ZONE 'UTC-8','YYYY-MM-DD hh24:mi:ss') as create_time,
+        to_char( sr.update_time AT TIME ZONE 'UTC-8','YYYY-MM-DD hh24:mi:ss') as update_time,
+        delete as delete,
+        internal as internal,
+        workspace_id as workspace_id,
+        menu_keys as menu_keys,
+        is_admin as is_admin
+        from sys_role sr
+        <where>
+            delete = false
+            <if test="item.id != null and item.id != ''">
+                and sr.id = #{item.id}
+            </if>
+
+            <if test="item.name != null and item.name != ''">
+                and sr.name like '%'||#{item.name}||'%'
+            </if>
+            <if test="item.workspaceId != null and item.workspaceId != ''">
+                and sr.workspace_id = #{item.workspaceId}
+            </if>
+
+        </where>
+
+        order by sr.create_time desc
+    </select>
+
+    <select id="getOne" resultType="com.lenovo.entity.Role">
+        select
+        <include refid="Base_Column_List"/>
+        from sys_role
+        <where>
+            id = #{id}
+        </where>
+    </select>
+
+    <!--根据name获取角色ID-->
+    <select id="getRoleIdByName" resultType="com.lenovo.entity.Role">
+        select
+        <include refid="Base_Column_List"/>
+        from sys_role
+        <where>
+            name = #{name}
+        </where>
+    </select>
+
+    <select id="countByPage" resultType="java.lang.Integer">
+        select
+        count(0)
+        from sys_role
+        <where>
+            delete = false
+            <if test="item.id != null and item.id != ''">
+                and id = #{item.id}
+            </if>
+
+            <if test="item.name != null and item.name != ''">
+                and name like '%'||#{item.name}||'%'
+            </if>
+            <if test="item.workspaceId != null and item.workspaceId != ''">
+                and workspace_id = #{item.workspaceId}
+            </if>
+        </where>
+    </select>
+    <select id="selectList" resultType="com.lenovo.entity.Role">
+        select
+        <include refid="Base_Column_List"/>
+        from sys_role
+        <where>
+            status = true
+            and delete = false
+        </where>
+
+        order by create_time desc
+
+    </select>
+    <select id="findRoleByUserId" resultType="com.lenovo.entity.Role">
+        select sr.id, sr."name", sr.workspace_id, sr.menu_keys, sr.is_admin
+        from sys_role sr
+                 left join sys_user_roles sur on sur.role_id = sr.id and type = #{type}
+        where
+          delete = false
+          and status = true
+        <if test="id != null and id !=''">
+            and sur.user_id = '${id}'
+        </if>
+    </select>
+    <select id="findUserMenuByRoleId" resultType="com.lenovo.bean.UserMenuBean">
+        select r.read_write as readAndWrite, menu.id as menuId, menu.*, menu.is_menu as menuFlag
+        from menu_router as menu
+                 left join
+             (select srm.menu_id, srm.read_write from sys_role_menu srm where srm.role_id = #{roleId}) as r
+             on menu.id = r.menu_id
+        order by id
+    </select>
+    <select id="findMenuByRoleId" resultType="com.lenovo.bean.UserMenuBean">
+        select r.checked,
+               r.read_write   as readAndWrite,
+               menu.id        as menuId,
+               menu.menu_path as menuPath,
+               menu.parent_id as parentId,
+               menu.level,
+               menu.description,
+               menu.menu_key  as menuKey,
+               menu.icon,
+               menu.show,
+               menu."rank"
+            from menu_router as menu
+                 left join
+             (select srm.menu_id, srm.read_write, srm.checked
+              from sys_role_menu srm
+              where srm.role_id = #{roleId}) as r
+              on menu.id = r.menu_id where menu.is_delete= '0'
+        order by menu."rank"
+    </select>
+    <select id="getName" resultType="com.lenovo.entity.Role">
+        select * from sys_role where name = #{name} and delete = false
+        <if test="roleId != null and roleId != ''">
+            and id != #{roleId}
+        </if>
+        <if test="workspaceId != null">
+            and workspace_id = #{workspaceId}
+        </if>
+        limit 1
+    </select>
+    <select id="findUserByRoles" resultType="java.lang.String">
+        select array_to_string(ARRAY(SELECT unnest(array_agg(distinct t.user_name))), ',')
+        from (select su.user_name
+              from sys_user su
+                       left join sys_user_roles sur
+                                 on su.id = sur.user_id and su.delete = false and su.status = true and
+                                    sur."type" = 'Cybertron'
+              where sur.role_id = #{roleId}
+              union all
+              select su.user_name
+              from ad_tb_upp_nature_2 su
+                       left join sys_user_roles sur on su.id = sur.user_id and sur."type" = 'ADFS'
+              where sur.role_id = #{roleId}) as t
+
+    </select>
+    <select id="findMenuByRoleIdAndCheckTrue" resultType="com.lenovo.bean.UserMenuBean">
+        with tmp as (select distinct menu.parent_id
+                     from menu_router menu,
+                          sys_role_menu srm
+                     where srm.menu_id = menu.id
+                       and srm.role_id = #{roleId}
+                       and srm.checked = true)
+        select srm.checked,
+               srm.read_write as readAndWrite,
+               menu.id        as menuId,
+               menu.menu_path as menuPath,
+               menu.parent_id as parentId,
+               menu.level,
+               menu.description,
+               menu.menu_key  as menuKey,
+               menu.icon,
+               menu.show,
+               menu."rank"
+        from menu_router menu,
+             sys_role_menu srm
+        where (srm.menu_id in (select * from tmp) or srm.checked = true)
+          and srm.menu_id = menu.id
+          and srm.role_id = #{roleId}
+
+    </select>
+
+    <update id="modifyById">
+        update sys_role set
+        <trim prefixOverrides="," suffixOverrides=",">
+            <if test="item.name != null and item.name != ''">
+                name = #{item.name},
+            </if>
+            <if test="item.description != null and item.description != ''">
+                description = #{item.description},
+            </if>
+            <if test="item.status != null and item.status != ''">
+                status = #{item.status},
+            </if>
+            update_time = now(),
+            <if test="item.delete != null and item.delete != ''">
+                delete = #{item.delete},
+            </if>
+            <if test="item.menuKeys != null and item.menuKeys != ''">
+                menu_keys = #{item.menuKeys},
+            </if>
+            <if test="item.isAdmin != null">
+                is_admin = #{item.isAdmin},
+            </if>
+        </trim>
+        <where>
+            id = #{item.id} and internal = false
+        </where>
+    </update>
+
+    <update id="resetStatus">
+        UPDATE sys_role
+        SET status      = case when status then false else true end,
+            update_time = now()
+        where id = #{id}
+    </update>
+</mapper>

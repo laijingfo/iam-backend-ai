@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.RiskManagementMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.RiskManagement">
+        <id property="id" column="id" jdbcType="INTEGER"/>
+        <result property="checkSequenceId" column="check_sequence_id" jdbcType="VARCHAR"/>
+        <result property="complianceControlId" column="compliance_control_id" jdbcType="INTEGER"/>
+        <result property="complianceId" column="compliance_id" jdbcType="INTEGER"/>
+        <result property="complianceStatus" column="compliance_status" jdbcType="BOOLEAN"/>
+        <result property="application" column="application" jdbcType="VARCHAR"/>
+        <result property="appOwner" column="app_owner" jdbcType="VARCHAR"/>
+        <result property="riskUserId" column="risk_user_id" jdbcType="VARCHAR"/>
+        <result property="riskUserAccountType" column="risk_user_account_type" jdbcType="VARCHAR"/>
+        <result property="riskUser1stLevelManager" column="risk_user1st_level_manager" jdbcType="VARCHAR"/>
+        <result property="riskUser2ndLevelManager" column="risk_user2nd_level_manager" jdbcType="VARCHAR"/>
+        <result property="riskAuthId" column="risk_auth_id" jdbcType="VARCHAR"/>
+        <result property="riskUserStatus" column="risk_user_status" jdbcType="VARCHAR"/>
+        <result property="bpoApprover" column="bpo_approver" jdbcType="VARCHAR"/>
+        <result property="ssrTicketId" column="ssr_ticket_id" jdbcType="VARCHAR"/>
+        <result property="appTicketSubmitter" column="app_ticket_submitter" jdbcType="VARCHAR"/>
+        <result property="appTicketApprover" column="app_ticket_approver" jdbcType="VARCHAR"/>
+        <result property="appOwnerDomain" column="app_owner_domain" jdbcType="VARCHAR"/>
+        <result property="appOwnerT2Org" column="app_owner_t2_org" jdbcType="VARCHAR"/>
+        <result property="appOwnerT3Org" column="app_owner_t3_org" jdbcType="VARCHAR"/>
+        <result property="appOwnerT4Org" column="app_owner_t4_org" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssignee" column="risk_handling_assignee" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssigneeT2Org" column="risk_handling_assignee_t2_org" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssigneeT3Org" column="risk_handling_assignee_t3_org" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssigneeT4Org" column="risk_handling_assignee_t4_org" jdbcType="VARCHAR"/>
+        <result property="orgLevel1" column="org_level1" jdbcType="VARCHAR"/>
+        <result property="orgLevel2" column="org_level2" jdbcType="VARCHAR"/>
+        <result property="orgLevel3" column="org_level3" jdbcType="VARCHAR"/>
+        <result property="orgLevel4" column="org_level4" jdbcType="VARCHAR"/>
+        <result property="occurredDate" column="occurred_date" jdbcType="DATE"/>
+        <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
+        <result property="riskStatus" column="risk_status" jdbcType="INTEGER"/>
+        <result property="monthDate" column="month_date" jdbcType="VARCHAR"/>
+        <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
+        <result property="evidenceType" column="evidence_type" jdbcType="INTEGER"/>
+        <result property="evidentContent" column="evident_content" jdbcType="VARCHAR"/>
+        <result property="comment" column="comment" jdbcType="VARCHAR"/>
+    </resultMap>
+    <resultMap id="QueryResultMap" type="com.lenovo.entity.RiskManagement">
+        <id property="id" column="id" jdbcType="INTEGER"/>
+        <result property="checkSequenceId" column="check_sequence_id" jdbcType="VARCHAR"/>
+        <result property="complianceCategory" column="category" jdbcType="VARCHAR"/>
+        <result property="complianceControlId" column="compliance_control_id" jdbcType="INTEGER"/>
+        <result property="complianceId" column="compliance_id" jdbcType="INTEGER"/>
+        <result property="complianceStatus" column="compliance_status" jdbcType="BOOLEAN"/>
+        <result property="application" column="application" jdbcType="VARCHAR"/>
+        <result property="appOwner" column="app_owner" jdbcType="VARCHAR"/>
+        <result property="riskUserId" column="risk_user_id" jdbcType="VARCHAR"/>
+        <result property="riskUserAccountType" column="risk_user_account_type" jdbcType="VARCHAR"/>
+        <result property="riskUser1stLevelManager" column="risk_user1st_level_manager" jdbcType="VARCHAR"/>
+        <result property="riskUser2ndLevelManager" column="risk_user2nd_level_manager" jdbcType="VARCHAR"/>
+        <result property="riskAuthId" column="risk_auth_id" jdbcType="VARCHAR"/>
+        <result property="riskUserStatus" column="risk_user_status" jdbcType="VARCHAR"/>
+        <result property="bpoApprover" column="bpo_approver" jdbcType="VARCHAR"/>
+        <result property="ssrTicketId" column="ssr_ticket_id" jdbcType="VARCHAR"/>
+        <result property="appTicketSubmitter" column="app_ticket_submitter" jdbcType="VARCHAR"/>
+        <result property="appTicketApprover" column="app_ticket_approver" jdbcType="VARCHAR"/>
+        <result property="appOwnerDomain" column="app_owner_domain" jdbcType="VARCHAR"/>
+        <result property="appOwnerT2Org" column="app_owner_t2_org" jdbcType="VARCHAR"/>
+        <result property="appOwnerT3Org" column="app_owner_t3_org" jdbcType="VARCHAR"/>
+        <result property="appOwnerT4Org" column="app_owner_t4_org" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssignee" column="risk_handling_assignee" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssigneeT2Org" column="risk_handling_assignee_t2_org" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssigneeT3Org" column="risk_handling_assignee_t3_org" jdbcType="VARCHAR"/>
+        <result property="riskHandlingAssigneeT4Org" column="risk_handling_assignee_t4_org" jdbcType="VARCHAR"/>
+        <result property="orgLevel1" column="org_level1" jdbcType="VARCHAR"/>
+        <result property="orgLevel2" column="org_level2" jdbcType="VARCHAR"/>
+        <result property="orgLevel3" column="org_level3" jdbcType="VARCHAR"/>
+        <result property="orgLevel4" column="org_level4" jdbcType="VARCHAR"/>
+        <result property="occurredDate" column="occurred_date" jdbcType="DATE"/>
+        <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
+        <result property="riskStatus" column="risk_status" jdbcType="INTEGER"/>
+        <result property="monthDate" column="month_date" jdbcType="VARCHAR"/>
+        <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
+        <result property="evidenceType" column="evidence_type" jdbcType="INTEGER"/>
+        <result property="evidentContent" column="evident_content" jdbcType="VARCHAR"/>
+        <result property="comment" column="comment" jdbcType="VARCHAR"/>
+        <result property="handingTime" column="handing_time" jdbcType="TIMESTAMP"/>
+        <result property="handingName" column="handing_name" jdbcType="VARCHAR"/>
+        <association property="complianceControl" resultMap="com.lenovo.mapper.ComplianceControlMapper.BaseResultMap"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,check_sequence_id,compliance_control_id,
+        compliance_status,application,app_owner,
+        risk_user_id,risk_user_account_type,risk_user1st_level_manager,
+        risk_user2nd_level_manager,risk_auth_id,risk_user_status,
+        bpo_approver,ssr_ticket_id,app_ticket_submitter,
+        app_ticket_approver,app_owner_domain,app_owner_t2_org,
+        app_owner_t3_org,app_owner_t4_org,risk_handling_assignee,
+        risk_handling_assignee_t2_org,risk_handling_assignee_t3_org,risk_handling_assignee_t4_org,
+        org_level1,org_level2,org_level3,
+        org_level4,occurred_date,update_time,
+        risk_status,month_date,create_time,evidence_type,evident_content,"comment"
+    </sql>
+    <update id="processSync">
+        insert into risk_management
+        (check_sequence_id, compliance_id, compliance_status, application, app_owner,
+         risk_user_id, risk_user_account_type, risk_user1st_level_manager,
+         risk_user2nd_level_manager, risk_auth_id, risk_user_status,
+         bpo_approver, ssr_ticket_id, app_ticket_submitter,
+         app_ticket_approver, app_owner_domain, app_owner_t2_org,
+         app_owner_t3_org, app_owner_t4_org, risk_handling_assignee,
+         risk_handling_assignee_t2_org, risk_handling_assignee_t3_org, risk_handling_assignee_t4_org,
+         org_level1, org_level2, org_level3,
+         org_level4, occurred_date, month_date, create_time, risk_status,app_owner_email)
+        select check_sequence_id,
+               compliance_id,
+               false,
+               application,
+               app_owner,
+               risk_user_id,
+               risk_user_account_type,
+               risk_user1st_level_manager,
+               risk_user2nd_level_manager,
+               risk_auth_id,
+               risk_user_status,
+               bpo_approver,
+               ssr_ticket_id,
+               app_ticket_submitter,
+               app_ticket_approver,
+               app_owner_domain,
+               app_owner_t2_org,
+               app_owner_t3_org,
+               app_owner_t4_org,
+               risk_handling_assignee,
+               risk_handling_assignee_t2_org,
+               risk_handling_assignee_t3_org,
+               risk_handling_assignee_t4_org,
+               org_level1,
+               org_level2,
+               org_level3,
+               org_level4,
+               occurred_date::date,
+                month_date,
+               now(),
+               1,
+               app_owner_email
+        from risk_management_original
+            on conflict (check_sequence_id) do nothing;
+        update risk_management
+        set compliance_control_id = cc.id
+            from compliance_control cc
+        where risk_management.compliance_id = cc.compliance_id;
+        with t as (select r.check_sequence_id as id
+                   from risk_management r
+                            left join risk_management_original o on r.check_sequence_id = o.check_sequence_id
+                   where o.check_sequence_id is null or o.compliance_status='compliant')
+        update risk_management
+        set compliance_status = true,
+            risk_status       = 2,
+            update_time       = now()
+            from t
+        where check_sequence_id = t.id;
+    </update>
+    <select id="query" resultMap="QueryResultMap">
+        SELECT
+        rm.*,
+        cc.*
+        FROM
+        risk_management rm left join compliance_control cc on rm.compliance_id = cc.compliance_id
+        <where>
+            <if test="riskQueryBean.complianceId != null and riskQueryBean.complianceId != ''">
+                rm.compliance_id = #{riskQueryBean.complianceId}
+            </if>
+            <if test="riskQueryBean.category != null and riskQueryBean.category != ''">
+                AND cc.category = #{riskQueryBean.category}
+            </if>
+            <if test="riskQueryBean.appOwnerDomain != null and riskQueryBean.appOwnerDomain != ''">
+                    AND rm.app_owner_domain = #{riskQueryBean.appOwnerDomain}
+            </if>
+            <if test="riskQueryBean.appOwnerT2Org != null and riskQueryBean.appOwnerT2Org != ''">
+                AND rm.app_owner_t2_org = #{riskQueryBean.appOwnerT2Org}
+            </if>
+            <if test="riskQueryBean.appOwnerT3Org != null and riskQueryBean.appOwnerT3Org != ''">
+                AND rm.app_owner_t3_org = #{riskQueryBean.appOwnerT3Org}
+            </if>
+            <if test="riskQueryBean.appOwnerT4Org != null and riskQueryBean.appOwnerT4Org != ''">
+                AND rm.app_owner_t4_org = #{riskQueryBean.appOwnerT4Org}
+            </if>
+            <if test="riskQueryBean.riskHandlingAssignee != null and riskQueryBean.riskHandlingAssignee != ''">
+                AND rm.risk_handling_assignee = #{riskQueryBean.riskHandlingAssignee}
+            </if>
+            <if test="riskQueryBean.riskHandlingAssigneeT2Org != null and riskQueryBean.riskHandlingAssigneeT2Org != ''">
+                AND rm.risk_handling_assignee_t2_org = #{riskQueryBean.riskHandlingAssigneeT2Org}
+            </if>
+            <if test="riskQueryBean.riskHandlingAssigneeT3Org != null and riskQueryBean.riskHandlingAssigneeT3Org != ''">
+                AND rm.risk_handling_assignee_t3_org = #{riskQueryBean.riskHandlingAssigneeT3Org}
+            </if>
+            <if test="riskQueryBean.riskHandlingAssigneeT4Org != null and riskQueryBean.riskHandlingAssigneeT4Org != ''">
+                AND rm.risk_handling_assignee_t4_org = #{riskQueryBean.riskHandlingAssigneeT4Org}
+            </if>
+            <if test="riskQueryBean.riskStatus != null">
+                AND rm.risk_status = #{riskQueryBean.riskStatus}
+            </if>
+            <!-- 已废弃条件(勿放开): <if test="riskQueryBean.application != null and riskQueryBean.application != ''"> AND rm.application = #{riskQueryBean.application} </if> -->
+            <if test="riskQueryBean.application != null and riskQueryBean.application.size() > 0">
+                AND application IN
+                <foreach collection="riskQueryBean.application" item="app" open="(" separator="," close=")">
+                    #{app}
+                </foreach>
+            </if>
+            <if test="riskQueryBean.startDate != null">
+
+                AND     rm.occurred_date &gt;= TO_DATE(#{riskQueryBean.startDate}, 'YYYY-MM')
+            </if>
+            <if test="riskQueryBean.endDate != null">
+
+                AND rm.occurred_date &lt;=TO_DATE(#{riskQueryBean.endDate}, 'YYYY-MM') + INTERVAL '1 month'
+            </if>
+        </where>
+        order by rm.id desc
+    </select>
+    <select id="riskManagementStatistics" resultType="com.lenovo.bean.RiskManagementStatisticsBean">
+        select count(*) as all,
+        COALESCE(sum(case when risk_status ='1' then 1 else 0 end ), 0) as pendingProcessing,
+        COALESCE(sum(case when risk_status ='2' then 1 else 0 end ), 0) as completed
+        from risk_management;
+    </select>
+
+    <select id="applicationList" resultType="com.lenovo.bean.RiskManagementApplicationBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.application AS label FROM risk_management t
+            WHERE t.application IS NOT NULL
+            ) AS sub
+
+    </select>
+
+
+    <select id="complianceStatusList" resultType="com.lenovo.bean.RiskManagementcomplianceStatusBean">
+        SELECT
+            sub.category AS label,
+            sub.category AS value
+        FROM
+            (select   distinct cc.category from  risk_management rm left join compliance_control cc  on rm.compliance_id =cc.compliance_id
+            WHERE cc.category IS NOT NULL
+            ) AS sub
+
+    </select>
+
+    <select id="appOwnerDomainList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.app_owner_domain AS label FROM risk_management t
+            WHERE t.app_owner_domain IS NOT NULL  order by label
+            ) AS sub
+
+    </select>
+
+    <select id="appOwnerT2OrgList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.app_owner_t2_org AS label FROM risk_management t
+            WHERE t.app_owner_t2_org IS NOT NULL   order by label
+            ) AS sub
+
+    </select>
+
+
+    <select id="appOwnerT3OrgList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.App_Owner_T3_Org AS label FROM risk_management t
+            WHERE t.App_Owner_T3_Org IS NOT NULL  order by label
+            ) AS sub
+
+    </select>
+
+    <select id="appOwnerT4OrgList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.App_Owner_T4_Org AS label FROM risk_management t
+            WHERE t.App_Owner_T4_Org IS NOT NULL  order by label
+            ) AS sub
+
+    </select>
+
+    <select id="ComplianceIDList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.Compliance_ID AS label FROM risk_management t
+            WHERE t.Compliance_ID IS NOT NULL  order by label
+            ) AS sub
+
+    </select>
+
+    <select id="RiskHandlingAssigneeList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.Risk_Handling_Assignee AS label FROM risk_management t
+            WHERE t.Risk_Handling_Assignee IS NOT NULL order by label
+            ) AS sub
+
+    </select>
+
+    <select id="RiskHandlingAssigneeT2OrgList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.Risk_Handling_Assignee_T2_Org AS label FROM risk_management t
+            WHERE t.Risk_Handling_Assignee_T2_Org IS NOT NULL  order by label
+            ) AS sub
+
+    </select>
+    <select id="RiskHandlingAssigneeT3OrgList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.Risk_Handling_Assignee_T3_Org AS label FROM risk_management t
+            WHERE t.Risk_Handling_Assignee_T3_Org IS NOT NULL   order by label
+            ) AS sub
+
+    </select>
+
+    <select id="RiskHandlingAssigneeT4OrgList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+            (SELECT DISTINCT t.Risk_Handling_Assignee_T4_Org AS label FROM risk_management t
+            WHERE t.Risk_Handling_Assignee_T4_Org IS NOT NULL  order by label
+            ) AS sub
+
+    </select>
+
+    <select id="findAppOwnerEmail" resultType="java.lang.String">
+        select  distinct app_owner_email from risk_management t
+
+    </select>
+    <select id="getByIdTSI" resultMap="QueryResultMap">
+        select  * from risk_management rm where  rm .id =#{id}
+    </select>
+
+</mapper>

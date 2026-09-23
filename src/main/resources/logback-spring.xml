@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- 文件输出格式 -->
+    <property name="PATTERN" value="%-12(%d{yyyy-MM-dd HH:mm:ss.SSS}) |-%-5level [%thread] %c [%L] -| %msg%n" />
+    <property name="PRO_FILE_PATH" value="/opt/itsc/log" />
+    <property name="DEV_FILE_PATH" value="/tmp/itsc/log" />
+
+    <!-- AWS SDK 1.x EOL announcement only; keep all other AWS/S3 logs unchanged. -->
+    <logger name="com.amazonaws.util.VersionInfoUtils" level="ERROR" />
+    <!-- jasypt 输出 -->
+    <logger name="com.ulisesbocchio.jasyptspringboot.caching" level="WARN"/>
+    <!-- redis 的 connect/reconnect 日志输出，如果刷屏可开启 -->
+<!--    <logger name="io.lettuce.core.protocol.ConnectionWatchdog" level="WARN"/>-->
+<!--    <logger name="io.lettuce.core.protocol.ReconnectionHandler" level="WARN"/>-->
+    <!-- 控制台输出 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>DEBUG</level>
+        </filter>
+    </appender>
+
+
+
+
+    <springProfile name="prod,prod-na">
+        <!-- 文件输出 -->
+        <appender name="PROD_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${PRO_FILE_PATH}/info.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>${PRO_FILE_PATH}/info.%d{yyyy-MM-dd}.log</fileNamePattern>
+                <maxHistory>100</maxHistory>
+            </rollingPolicy>
+            <encoder>
+                <pattern>${PATTERN}</pattern>
+            </encoder>
+            <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+                <level>DEBUG</level>
+            </filter>
+        </appender>
+        <!-- 关闭操作记录 -->
+        <logger name="com.lenovo.config.SysActionLogAspect" level="OFF" additivity="false"/>
+        <logger name="com.lenovo.mapper.SysActionLogMapper" level="WARN" />
+
+        <!-- 业务代码 INFO -> 控制台+文件 -->
+        <logger name="com.lenovo" level="INFO"/>
+        <logger name="com.lenovo.mapper" level="DEBUG" />
+
+        <!-- 根日志 INFO -> 控制台+文件 -->
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="PROD_FILE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="uat,dev">
+        <!-- 文件输出 -->
+        <appender name="DEV_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${DEV_FILE_PATH}/info.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>${DEV_FILE_PATH}/info.%d{yyyy-MM-dd}.log</fileNamePattern>
+                <maxHistory>100</maxHistory>
+            </rollingPolicy>
+            <encoder>
+                <pattern>${PATTERN}</pattern>
+            </encoder>
+            <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+                <level>DEBUG</level>
+            </filter>
+        </appender>
+        <!-- 关闭操作记录 -->
+        <logger name="com.lenovo.config.SysActionLogAspect" level="OFF" additivity="false"/>
+        <logger name="com.lenovo.mapper.SysActionLogMapper" level="WARN" />
+
+        <!-- 业务代码 INFO -> 控制台+文件 -->
+        <logger name="com.lenovo" level="INFO"/>
+        <logger name="com.lenovo.mapper" level="DEBUG" />
+
+        <!-- 根日志 INFO -> 控制台+文件 -->
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="DEV_FILE"/>
+        </root>
+    </springProfile>
+</configuration>

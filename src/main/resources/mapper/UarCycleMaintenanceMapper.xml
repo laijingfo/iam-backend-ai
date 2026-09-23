@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UarCycleMaintenanceMapper">
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.UarCycleMaintenance">
+        <result property="id" column="id" jdbcType="VARCHAR"/>
+        <result property="cmdbId" column="cmdb_id" jdbcType="VARCHAR"/>
+        <result property="uarId" column="uar_id" jdbcType="VARCHAR"/>
+        <result property="uarName" column="uar_name" jdbcType="VARCHAR"/>
+        <result property="appUarPlatformStatus" column="app_uar_platform_status" jdbcType="BOOLEAN"/>
+        <result property="uarCycleStartDate" column="uar_cycle_start_date" jdbcType="DATE"/>
+        <result property="uarCycleEndDate" column="uar_cycle_end_date" jdbcType="DATE"/>
+        <result property="accessReviewScope" column="access_review_scope" jdbcType="VARCHAR"/>
+        <result property="operatorDate" column="operator_date" jdbcType="TIMESTAMP"/>
+        <result property="operatorName" column="operator_name" jdbcType="VARCHAR"/>
+        <result property="confirmationDate" column="confirmation_date" jdbcType="TIMESTAMP"/>
+        <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
+        <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
+        <result property="createBy" column="create_by" jdbcType="VARCHAR"/>
+        <result property="updateBy" column="update_by" jdbcType="VARCHAR"/>
+
+
+
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,
+        cmdb_id,
+        uar_id,
+        uar_name,
+        uar_cycle_start_date,
+        uar_cycle_end_date,
+        access_review_scope,
+        operator_date,
+        operator_name,
+        confirmation_date,
+        create_time,
+        update_time,
+        create_by,
+        update_by
+    </sql>
+
+    <sql id="Base_Conditions">
+        <where>
+            iad.delete_flag = FALSE
+            <if test="uarCycleMaintenanceBean.application != null and uarCycleMaintenanceBean.application != ''">
+                AND iad.application_name = #{uarCycleMaintenanceBean.application}
+            </if>
+            <if test="uarCycleMaintenanceBean.applicationId != null and uarCycleMaintenanceBean.applicationId != ''">
+                AND iad.cmdb_id = #{uarCycleMaintenanceBean.applicationId}
+            </if>
+            <if test="uarCycleMaintenanceBean.uarCycleStartMonth != null and uarCycleMaintenanceBean.uarCycleStartMonth != ''">
+                AND ucm.uar_cycle_start_date = #{uarCycleMaintenanceBean.uarCycleStartMonth}
+            </if>
+            <if test="uarCycleMaintenanceBean.uarCycleEndMonth != null and uarCycleMaintenanceBean.uarCycleEndMonth != ''">
+                AND ucm.uar_cycle_end_date = #{uarCycleMaintenanceBean.uarCycleEndMonth}
+            </if>
+            <if test="uarCycleMaintenanceBean.uarProcessor != null and uarCycleMaintenanceBean.uarProcessor != ''">
+                AND iad.uar_processor ~* '\y(${uarCycleMaintenanceBean.uarProcessor})\y'
+            </if>
+            <choose >
+                <when test="uarCycleMaintenanceBean.cycleDataFlag == 'Active'">
+                    AND iad.data_ready_flag = true
+                </when>
+                <when test="uarCycleMaintenanceBean.cycleDataFlag == 'Inactive'">
+                    AND iad.data_ready_flag = false
+                </when>
+            </choose>
+            <if test="uarCycleMaintenanceBean.appUarPlatformStatus != null and uarCycleMaintenanceBean.appUarPlatformStatus != ''" >
+                <choose>
+                    <when test="uarCycleMaintenanceBean.appUarPlatformStatus == 'Null'">
+                        AND (ucm.app_uar_platform_status IS NULL OR ucm.app_uar_platform_status = 'Null')
+                    </when>
+                    <otherwise>
+                        AND ucm.app_uar_platform_status = #{uarCycleMaintenanceBean.appUarPlatformStatus}
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="uarCycleMaintenanceBean.dataRange != null and uarCycleMaintenanceBean.dataRange != ''">
+                <choose>
+                    <when test='uarCycleMaintenanceBean.dataRange.contains("*")'>
+                        <!-- 通配符，代表查询全部数据 -->
+                    </when>
+                    <otherwise>
+                        AND iad.cmdb_id in (
+                        <foreach item="item" collection="uarCycleMaintenanceBean.dataRange" separator=",">
+                            #{item}
+                        </foreach>
+                        )
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="uarCycleMaintenanceBean.onlineFlag != null and uarCycleMaintenanceBean.onlineFlag != ''">
+                AND iad.online_flag = #{uarCycleMaintenanceBean.onlineFlag}
+            </if>
+            <if test="uarCycleMaintenanceBean.appStatus != null and uarCycleMaintenanceBean.appStatus != ''">
+                AND iad.app_status = #{uarCycleMaintenanceBean.appStatus}
+            </if>
+            <if test="uarCycleMaintenanceBean.applicationItOwner != null and uarCycleMaintenanceBean.applicationItOwner != ''">
+                AND iad.application_it_owner = #{uarCycleMaintenanceBean.applicationItOwner}
+            </if>
+            <if test="uarCycleMaintenanceBean.operationOwner != null and uarCycleMaintenanceBean.operationOwner != ''">
+                AND iad.operation_owner = #{uarCycleMaintenanceBean.operationOwner}
+            </if>
+            <if test="uarCycleMaintenanceBean.operationFocal != null and uarCycleMaintenanceBean.operationFocal != ''">
+                AND iad.operation_focal = #{uarCycleMaintenanceBean.operationFocal}
+            </if>
+            <if test="uarCycleMaintenanceBean.dataSource != null and uarCycleMaintenanceBean.dataSource != ''">
+                AND iad.data_source = #{uarCycleMaintenanceBean.dataSource}
+            </if>
+        </where>
+    </sql>
+
+
+
+    <select id="query" resultType="com.lenovo.bean.ApplicationCycleInfoBean">
+        SELECT
+            iad.cmdb_id as  applicationId,
+            iad.application_name as application,
+            ucm.uar_id ,
+            ucm.uar_name ,
+            ucm.access_review_scope as accessReviewScope,
+            CASE
+                WHEN iad.data_ready_flag THEN 'Active'
+                ELSE 'Inactive'
+            END as cycleDataFlag,
+
+            iad.online_flag,
+            iad.online_time,
+            iad.offline_time,
+            iad.decommission_reason,
+            ucm.app_uar_platform_status,
+            ucm.uar_cycle_start_date as uarCycleStartMonth,
+            ucm.uar_cycle_end_date as uarCycleEndMonth,
+            iad.operator_date ,
+            iad.operator_name ,
+            ucm.confirmation_date,
+            iad.modified_by,
+            iad.modification_date,
+            iad.uar_processor,
+            iad.uar_processor_email,
+            iad.app_status,
+            iad.application_it_owner,
+            iad.operation_owner,
+            iad.operation_focal,
+            iad.data_source,
+            aal.access_link
+        FROM its_application_data iad
+        LEFT JOIN its_application_access_link aal ON iad.cmdb_id = aal.cmdb_id
+            LEFT JOIN LATERAL (
+                SELECT *
+                FROM uar_cycle_maintenance
+                WHERE cmdb_id = iad.cmdb_id
+                ORDER BY id DESC
+                LIMIT 1
+            ) ucm ON TRUE
+        <include refid="Base_Conditions" />
+        order by iad.cmdb_id desc
+    </select>
+
+    <select id="queryFullData" resultType="com.lenovo.bean.ApplicationCycleInfoBean">
+        SELECT
+            iad.cmdb_id as  applicationId,
+            iad.application_name as application,
+            ucm.uar_id ,
+            ucm.uar_name ,
+            ucm.access_review_scope as accessReviewScope,
+            iad.online_time,
+            iad.offline_time,
+            iad.decommission_reason,
+            ucm.uar_cycle_start_date as uarCycleStartMonth,
+            ucm.uar_cycle_end_date as uarCycleEndMonth,
+            iad.operator_date ,
+            iad.operator_name ,
+            ucm.confirmation_date,
+            iad.modified_by,
+            iad.modification_date,
+            iad.uar_processor as uarProcessorStr,
+            iad.uar_processor_email,
+            iad.app_status,
+            iad.operation_owner,
+            iad.operation_focal,
+            aal.access_link,
+<!--        中英文-->
+        <choose>
+            <when test="uarCycleMaintenanceBean.language == 'CN'">
+                CASE
+                    WHEN iad.data_ready_flag THEN '就绪'
+                    ELSE '未就绪'
+                END as cycleDataFlag,
+                CASE
+                    WHEN iad.online_flag THEN '已上线'
+                    ELSE '已下线'
+                END as onlineFlagStr,
+                CASE ucm.app_uar_platform_status
+                    WHEN null THEN '无'
+                    WHEN 'Active' THEN '启用'
+                    WHEN 'Inactive' THEN '停用'
+                    WHEN 'Completed' THEN '已完成'
+                    ELSE ''
+                END as appUarPlatformStatus,
+                CASE iad.data_source
+                    WHEN 'IMPORT' THEN '导入'
+                    WHEN 'SYNC' THEN '同步'
+                    ELSE ''
+                END as data_source
+            </when>
+            <otherwise>
+                CASE
+                    WHEN iad.data_ready_flag THEN 'Ready'
+                    ELSE 'Not Ready'
+                END as cycleDataFlag,
+                CASE
+                    WHEN iad.online_flag THEN 'Online'
+                    ELSE 'Offline'
+                END as onlineFlagStr,
+                CASE ucm.app_uar_platform_status
+                    WHEN null THEN 'Empty'
+                    WHEN 'Active' THEN 'Enabled'
+                    WHEN 'Inactive' THEN 'Disabled'
+                    WHEN 'Completed' THEN 'Completed'
+                    ELSE ''
+                END as appUarPlatformStatus,
+                iad.data_source
+            </otherwise>
+        </choose>
+
+        FROM its_application_data iad
+        LEFT JOIN LATERAL (
+            SELECT *
+                FROM uar_cycle_maintenance
+                WHERE cmdb_id = iad.cmdb_id
+                ORDER BY id DESC
+                LIMIT 1
+            ) ucm ON TRUE
+        LEFT JOIN its_application_access_link aal ON iad.cmdb_id = aal.cmdb_id
+        <include refid="Base_Conditions" />
+        order by iad.cmdb_id desc
+    </select>
+
+    <select id="uar_cycle_maintenance_distinct_list" resultType="map">
+        SELECT
+        application AS "application",
+        false AS "checked",
+        null AS "uarCycleStartMonth"  <!-- 显式表示 null -->
+        FROM
+        uar_cycle_maintenance_distinct rm
+        WHERE rm.status='inactive'
+    </select>
+
+    <update id="batchUpdateUar_cycle_maintenance_distinctStatus">
+        <!-- 使用临时表方式批量更新 (PostgreSQL 推荐) -->
+        UPDATE uar_cycle_maintenance_distinct AS target
+        SET
+        status='active'
+
+        FROM (
+        <foreach collection="list" item="item" index="index"
+                 separator=" UNION ALL ">
+            SELECT
+            #{item.application}::text AS application
+
+        </foreach>
+        ) AS source
+        WHERE target.application = source.application
+
+    </update>
+    <!-- 周期维护下线列表 -->
+
+    <select id="uar_cycle_maintenance_distinct_application" resultType="java.util.Map">
+        SELECT sub."label" AS label,
+               sub."value" AS value
+        FROM (
+        SELECT t.application_name "label", t.cmdb_id "value"
+        FROM its_application_data t
+        WHERE t.cmdb_id IS NOT NULL
+        AND t.delete_flag = false
+        AND t.online_flag = true
+        order by "label"
+        ) AS sub
+    </select>
+
+    <select id="queryIdListByFilters" resultType="java.lang.String">
+        SELECT
+        iad.cmdb_id as  applicationId
+        FROM its_application_data iad
+        LEFT JOIN LATERAL (
+            SELECT *
+            FROM uar_cycle_maintenance
+            WHERE cmdb_id = iad.cmdb_id
+            ORDER BY id DESC
+            LIMIT 1
+        ) ucm ON TRUE
+        <include refid="Base_Conditions" />
+    </select>
+
+    <!--  最新的周期数据  -->
+    <select id="queryUarIdByCmdbId" resultType="java.lang.String">
+        SELECT id as uarId
+        FROM uar_cycle_maintenance
+        WHERE cmdb_id = #{cmdbId}
+        ORDER BY id DESC
+            LIMIT 1
+    </select>
+
+    <select id="queryLatestByCmdbId" resultMap="BaseResultMap">
+        SELECT *
+        FROM uar_cycle_maintenance
+        WHERE cmdb_id = #{cmdbId}
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <update id="batchCompleteCycle">
+        UPDATE uar_cycle_maintenance
+        SET
+        app_uar_platform_status = 'Completed',
+        confirmation_date = CURRENT_TIMESTAMP
+        WHERE cmdb_id in (
+        <foreach collection="cmdbId" item="item" index="index"
+                 separator=",">
+            #{item}
+        </foreach>
+        )
+        AND app_uar_platform_status = 'Active'
+
+    </update>
+
+    <select id="queryCompletedCmdbIdByUarId" resultType="java.lang.String">
+        SELECT distinct cmdb_id as cmdbId
+        FROM uar_cycle_maintenance
+        WHERE app_uar_platform_status = 'Completed' and
+        id in (
+        <foreach collection="distinctCmdbIdList" item="item" index="index"
+                 separator=",">
+            #{item}
+        </foreach>
+        )
+    </select>
+
+    <select id="queryUarCompletedCycleByCmdbId" resultType="boolean">
+        SELECT
+            CASE WHEN app_uar_platform_status = 'Completed' THEN true
+            ELSE false
+            END AS completed
+        FROM uar_cycle_maintenance
+        WHERE cmdb_id = #{cmdbId}
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+</mapper>

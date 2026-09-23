@@ -1,0 +1,622 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.AlertDashboardMapper">
+
+
+    <update id="insertUarAlertData">
+        INSERT INTO user_access_review_alert (
+            id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,email,user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_band_ed_flag,line_manager_level_code,dept,line_manager,line_manager_email,line_manager_review_status,line_managers_review_decision,it_code_of_bpo,bpo,bpo_email,user_coc_type,bpo_coc_type,bpo_review_status,bpo_review_decision,final_review_decision,final_review_time,line_manager_review_itcode,line_manager_review_time,bpo_review_itcode,bpo_review_time,bpo_update_by,bpo_update_time,app_bpo,app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+            create_by,alert_type
+        )
+        SELECT
+            uar.id,uar.sequence_number,uar.uuid,uar.cmdb_id,uar.uar_id,uar.app_name,uar.it_code_of_user,uar.email,uar.user_name,uar.user_real_name,uar.system_role_id,uar.system_role,uar.role_description,uar.role_valid_to,uar.country,uar.department,uar.user_id,uar.user_id_valid_to,uar.user_id_lock,uar.access_label,uar.line_manager_band_ed_flag,uar.line_manager_level_code,uar.dept,uar.line_manager,uar.line_manager_email,uar.line_manager_review_status,uar.line_managers_review_decision,uar.it_code_of_bpo,uar.bpo,uar.bpo_email,uar.user_coc_type,uar.bpo_coc_type,uar.bpo_review_status,uar.bpo_review_decision,uar.final_review_decision,uar.final_review_time,uar.line_manager_review_itcode,uar.line_manager_review_time,uar.bpo_review_itcode,uar.bpo_review_time,uar.bpo_update_by,uar.bpo_update_time,uar.app_bpo,uar.app_bpo_email,uar.backup_bpo,uar.backup_bpo_email,uar.backup_bpo_band_ed_flag,uar.bpo_band_ed_flag,uar.app_bpo_band_ed_flag,uar.leit_system_name,uar.leit_system_id,uar.access_review_decision,uar.first_line_manager,uar.second_line_manager,uar.audit_trail,uar.authorization_technical_name,uar.authorization_description,uar.authorization_valid_to,uar.overall_send_status,uar.current_round,uar.delete_flag,
+            #{operator},#{alertType}
+        FROM
+            user_access_review uar
+        <choose>
+            <when test="alertType == 10">
+                LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uar.it_code_of_user) = LOWER(atun.user_name)
+            </when>
+            <when test="alertType == 11">
+                LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uar.line_manager) = LOWER(atun.user_name)
+            </when>
+            <when test="alertType == 12"/>
+            <when test="alertType == 21">
+                LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uar.it_code_of_user) = LOWER(atun.user_name)
+            </when>
+            <otherwise>
+                1=0
+            </otherwise>
+        </choose>
+        <where>
+            uar.delete_flag = false
+            AND EXISTS (
+                SELECT 1
+                FROM uar_cycle_maintenance ucm
+                WHERE ucm.id::varchar = uar.uar_id
+                    AND ucm.cmdb_id = uar.cmdb_id
+                    AND ucm.app_uar_platform_status = 'Active'
+            )
+            <choose>
+                <when test="alertType == 10">
+                    AND (uar.line_manager_review_status = '1' OR uar.bpo_review_status = '1')
+                    AND final_review_decision IS NULL
+                    AND atun.user_name IS NULL
+                </when>
+                <when test="alertType == 11">
+                    AND atun.user_name IS NULL
+                    AND uar.line_manager_review_status = '1'
+                </when>
+                <when test="alertType == 12">
+                    AND bpo_review_status = '1'
+                    AND (
+                        uar.bpo IS NULL
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM UNNEST(string_to_array(uar.bpo, ';')) AS bpo_single
+                            INNER JOIN ad_tb_upp_nature_2 atun
+                                ON LOWER(TRIM(bpo_single)) = LOWER(atun.user_name)
+                            WHERE TRIM(bpo_single) != ''
+                        )
+                    )
+                </when>
+                <when test="alertType == 21">
+                    AND LOWER(uar.line_manager) IS DISTINCT FROM LOWER(atun.manager1st)
+                    AND uar.line_manager_review_status = '1'
+                </when>
+            </choose>
+
+            AND NOT EXISTS (
+                SELECT 1 FROM
+                    user_access_review_alert uara
+                WHERE uara.id = uar.id AND uara.alert_handle_status != 'Completed'
+             )
+        </where>
+    </update>
+
+    <update id="insertManualBpoInvalid">
+        INSERT INTO user_access_review_alert (
+            id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,email,user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_band_ed_flag,line_manager_level_code,dept,line_manager,line_manager_email,line_manager_review_status,line_managers_review_decision,it_code_of_bpo,bpo,bpo_email,user_coc_type,bpo_coc_type,bpo_review_status,bpo_review_decision,final_review_decision,final_review_time,line_manager_review_itcode,line_manager_review_time,bpo_review_itcode,bpo_review_time,bpo_update_by,bpo_update_time,app_bpo,app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+            create_by,alert_type, invalid_bpo
+        )
+        SELECT
+            uar.id,uar.sequence_number,uar.uuid,uar.cmdb_id,uar.uar_id,uar.app_name,uar.it_code_of_user,uar.email,uar.user_name,uar.user_real_name,uar.system_role_id,uar.system_role,uar.role_description,uar.role_valid_to,uar.country,uar.department,uar.user_id,uar.user_id_valid_to,uar.user_id_lock,uar.access_label,uar.line_manager_band_ed_flag,uar.line_manager_level_code,uar.dept,uar.line_manager,uar.line_manager_email,uar.line_manager_review_status,uar.line_managers_review_decision,uar.it_code_of_bpo,uar.bpo,uar.bpo_email,uar.user_coc_type,uar.bpo_coc_type,uar.bpo_review_status,uar.bpo_review_decision,uar.final_review_decision,uar.final_review_time,uar.line_manager_review_itcode,uar.line_manager_review_time,uar.bpo_review_itcode,uar.bpo_review_time,uar.bpo_update_by,uar.bpo_update_time,uar.app_bpo,uar.app_bpo_email,uar.backup_bpo,uar.backup_bpo_email,uar.backup_bpo_band_ed_flag,uar.bpo_band_ed_flag,uar.app_bpo_band_ed_flag,uar.leit_system_name,uar.leit_system_id,uar.access_review_decision,uar.first_line_manager,uar.second_line_manager,uar.audit_trail,uar.authorization_technical_name,uar.authorization_description,uar.authorization_valid_to,uar.overall_send_status,uar.current_round,uar.delete_flag,
+            #{operator},32, #{dto.bpo}
+        FROM
+            user_access_review uar
+        <where>
+            uar.delete_flag = false
+            AND uar.bpo_review_status = '1'
+            AND uar.cmdb_id = #{dto.cmdbId}
+            <if test="dto.systemRoles != null and dto.systemRoles.size() > 0">
+                AND uar.system_role IN
+                <foreach collection="dto.systemRoles" item="role" open="(" separator="," close=")">
+                    #{role}
+                </foreach>
+            </if>
+
+            AND EXISTS (
+                SELECT 1
+                FROM unnest(string_to_array(uar.bpo, ';')) AS bpo_single
+                WHERE LOWER(TRIM(bpo_single)) = LOWER(#{dto.bpo})
+            )
+        </where>
+    </update>
+
+    <delete id="deleteSourceData">
+        DELETE FROM user_access_review uar
+        WHERE EXISTS (
+            SELECT 1
+            FROM user_access_review_alert uara
+            WHERE uar.id = uara.id and uara.alert_handle_status != 'Completed'
+        );
+    </delete>
+
+    <sql id="Base_Column">
+        uara.id ,
+        uara.sequence_number as sequenceNumber,
+        uara.cmdb_id as cmdbId,
+        app.application_name as appName,
+        app.operation_owner as operationOwner,
+        app.operation_focal as operationFocal,
+        app.operation_owner_domain as operationOwnerDomain,
+        app.operation_owner_tower as operationOwnerTower,
+        uara.alert_type as alertType,
+        <if test="request.language != null and request.language != ''">
+            <choose>
+                <when test="request.language == 'CN'">
+                    CASE
+                    WHEN uara.alert_type = 10 THEN '用户 ITcode 失效'
+                    WHEN uara.alert_type = 11 THEN '直属经理 ITcode 失效'
+                    WHEN uara.alert_type = 12 THEN 'BPO ITcode 失效'
+                    WHEN uara.alert_type = 21 THEN '直属经理变更'
+                    WHEN uara.alert_type = 32 THEN '人工标记BPO失效'
+                    ELSE '未知' END as alertTypeStr,
+                </when>
+                <otherwise>
+                    CASE
+                    WHEN uara.alert_type = 10 THEN 'User''s ITcode has expired'
+                    WHEN uara.alert_type = 11 THEN 'Line manager''s ITcode has expired'
+                    WHEN uara.alert_type = 12 THEN 'BPO''s ITcode has expired'
+                    WHEN uara.alert_type = 21 THEN 'Line manager has changed'
+                    WHEN uara.alert_type = 32 THEN 'Manually marked BPO failure'
+                    ELSE 'Unknown' END as alertTypeStr,
+                </otherwise>
+            </choose>
+        </if>
+
+        uara.remark,
+        uara.it_code_of_user as itCodeOfUser,
+        uara.user_coc_type as userCocType,
+        uara.user_id as userId,
+        uara.user_name as userName,
+        uara.system_role_id as systemRoleId,
+        uara.system_role as systemRole,
+        uara.role_description as roleDescription,
+        uara.alert_handle_status as alertHandleStatus,
+        <if test="request.language != null and request.language != ''">
+            <choose>
+                <when test="request.language == 'CN'">
+                    CASE
+                    WHEN uara.alert_handle_status = 'Pending' THEN '待处理'
+                    WHEN uara.alert_handle_status = 'Send' THEN '已发邮件未处理'
+                    WHEN uara.alert_handle_status = 'Completed' THEN '已处理'
+                    ELSE '未知' END as alertHandleStatusStr,
+                </when>
+                <otherwise>
+                    CASE
+                    WHEN uara.alert_handle_status = 'Pending' THEN 'Pending'
+                    WHEN uara.alert_handle_status = 'Send' THEN 'Sent but not deal'
+                    WHEN uara.alert_handle_status = 'Completed' THEN 'Completed'
+                    ELSE 'Unknown' END as alertHandleStatusStr,
+                </otherwise>
+            </choose>
+        </if>
+
+        uara.line_manager as lineManager,
+        atun.manager1st as successionManager,
+        uara.bpo,
+        uara.bpo_coc_type as bpoCocType,
+        null as managerOfBpo,
+        uara.create_by as createBy,
+        uara.create_time as createTime,
+        uara.update_by as updateBy,
+        uara.update_time as updateTime
+    </sql>
+
+    <sql id="Base_Conditions">
+        <where>
+            uara.delete_flag = false
+            <if test="request.cmdbId != null and request.cmdbId != ''">
+                AND uara.cmdb_id = #{request.cmdbId}
+            </if>
+            <if test="request.appName != null and request.appName != ''">
+                AND app.application_name = #{request.appName}
+            </if>
+            <if test="request.alertType != null and request.alertType != ''">
+                AND uara.alert_type = ANY(string_to_array(replace(#{request.alertType}, ' ', ''), ',')::int[])
+            </if>
+            <if test="request.itCodeOfUser != null and request.itCodeOfUser != ''">
+                AND uara.it_code_of_user = #{request.itCodeOfUser}
+            </if>
+            <if test="request.lineManager != null and request.lineManager != ''">
+                AND uara.line_manager = #{request.lineManager}
+            </if>
+            <if test="request.bpo != null and request.bpo != ''">
+                AND uara.bpo ~* '\y(${request.bpo})\y'
+            </if>
+            <choose>
+                <when test='request.dataRange.contains("*")'>
+                    <!-- 通配符，代表查询全部数据 -->
+                </when>
+                <otherwise>
+                    AND uara.cmdb_id in (
+                    <foreach item="item" collection="request.dataRange" separator=",">
+                        #{item}
+                    </foreach>
+                    )
+                </otherwise>
+            </choose>
+            <if test="request.alertHandleStatus != null and request.alertHandleStatus != ''">
+                AND uara.alert_handle_status = ANY(string_to_array(replace(#{request.alertHandleStatus}, ' ', ''), ','))
+            </if>
+            <if test="request.operationOwner != null and request.operationOwner != ''">
+                AND app.operation_owner = #{request.operationOwner}
+            </if>
+            <if test="request.operationFocal != null and request.operationFocal != ''">
+                <choose>
+                    <when test="request.operationFocal == 'None'">
+                        AND app.operation_focal IS NULL
+                    </when>
+                    <otherwise>
+                        AND app.operation_focal = #{request.operationFocal}
+                    </otherwise>
+                </choose>
+            </if>
+        </where>
+    </sql>
+    <select id="getList" resultType="com.lenovo.bean.UarAlertBean">
+        SELECT
+            <include refid="Base_Column" />
+        FROM user_access_review_alert uara
+        LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uara.it_code_of_user) = LOWER(atun.user_name)
+        LEFT JOIN its_application_data app ON uara.cmdb_id = app.cmdb_id
+        <include refid="Base_Conditions"/>
+        order by
+        <choose>
+            <when test='request.sortField != null and request.sortField != ""'>
+                ${request.sortField}
+            </when>
+            <otherwise>
+                uara.create_time
+            </otherwise>
+        </choose>
+        <choose>
+            <when test='request.sortOrder != null and request.sortOrder != ""'>
+                ${request.sortOrder}
+            </when>
+            <otherwise>
+                DESC
+            </otherwise>
+        </choose>
+        ,uara.id desc
+    </select>
+
+    <select id="getListCount" resultType="long">
+        SELECT COUNT(1)
+        FROM user_access_review_alert uara
+        LEFT JOIN its_application_data app ON uara.cmdb_id = app.cmdb_id
+        <include refid="Base_Conditions"/>
+    </select>
+
+
+    <update id="restoreDataAndUpdateReview">
+        INSERT INTO user_access_review (
+            id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,email,user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_band_ed_flag,line_manager_level_code,dept,line_manager,line_manager_email,it_code_of_bpo,bpo,bpo_email,user_coc_type,bpo_coc_type,bpo_update_by,bpo_update_time,app_bpo,app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+            line_manager_review_status, line_managers_review_decision, line_manager_review_itcode, line_manager_review_time,
+            bpo_review_status, bpo_review_decision, bpo_review_itcode, bpo_review_time,
+            final_review_decision, final_review_time, final_review_result_reason,
+            update_by, update_time, create_by, create_time
+        )
+        SELECT
+            id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,email,user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_band_ed_flag,line_manager_level_code,dept,line_manager,line_manager_email,it_code_of_bpo,bpo,bpo_email,user_coc_type,bpo_coc_type,bpo_update_by,bpo_update_time,app_bpo,app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+            '2', line_managers_review_decision, line_manager_review_itcode, line_manager_review_time,
+            '2', bpo_review_decision, bpo_review_itcode, bpo_review_time,
+            'remove', CURRENT_TIMESTAMP, 'User ITCode is invalid',
+            'USER_ALERT_REVERT', CURRENT_TIMESTAMP, 'ALERT_REVERT', CURRENT_TIMESTAMP
+        FROM
+            user_access_review_alert uara
+        WHERE uara.alert_type = 10 AND uara.alert_handle_status = 'Pending';
+
+        UPDATE user_access_review_alert uara
+        <set>
+            alert_handle_status = 'Completed',
+            update_by = 'JOB',
+            update_time = CURRENT_TIMESTAMP
+        </set>
+        <where>
+            uara.alert_handle_status = 'Pending'
+            AND uara.alert_type in (10)
+        </where>
+    </update>
+
+    <update id="restoreDataAndUpdateLineManager">
+        INSERT INTO user_access_review (
+            id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,email,user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_review_status,line_managers_review_decision,it_code_of_bpo,bpo,bpo_email,user_coc_type,bpo_coc_type,bpo_review_status,bpo_review_decision,final_review_decision,final_review_time,line_manager_review_itcode,line_manager_review_time,bpo_review_itcode,bpo_review_time,bpo_update_by,bpo_update_time,app_bpo,app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+            line_manager_band_ed_flag,line_manager_level_code,dept,line_manager,line_manager_email,
+            update_by, update_time, create_by, create_time
+        )
+        SELECT
+            uara.id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,uara.email,uara.user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,uara.country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_review_status,line_managers_review_decision,it_code_of_bpo,bpo,bpo_email,user_coc_type,bpo_coc_type,bpo_review_status,bpo_review_decision,final_review_decision,final_review_time,line_manager_review_itcode,line_manager_review_time,bpo_review_itcode,bpo_review_time,bpo_update_by,bpo_update_time,app_bpo,app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+            atun2.band_flag,
+            CASE WHEN atun2.management_level IN ('ED', 'Executive Director') THEN '2'
+                 WHEN atun2.management_level IN ('VP', 'Vice President') THEN '3'
+                 WHEN atun2.management_level IN ('SVP', 'Senior Vice President', 'EVP', 'Executive Vice President', 'CEO', 'Chief Executive Officer') THEN '4'
+                 ELSE '1'
+            END, atun2.lenovo_dept, atun2.user_name, atun2.email,
+            'LM_ALERT_REVERT', CURRENT_TIMESTAMP, 'ALERT_REVERT', CURRENT_TIMESTAMP
+        FROM
+            user_access_review_alert uara
+            LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uara.it_code_of_user) = LOWER(atun.user_name)
+            LEFT JOIN ad_tb_upp_nature_2 atun2 ON LOWER(atun.manager1st) = LOWER(atun2.user_name)
+        WHERE uara.alert_type in (11, 21) AND uara.alert_handle_status = 'Pending'
+            AND atun2.user_name IS NOT NULL;
+
+        UPDATE user_access_review_alert uara
+        <set>
+            alert_handle_status = 'Completed',
+            update_by = 'JOB',
+            update_time = CURRENT_TIMESTAMP
+        </set>
+        <where>
+            uara.alert_handle_status = 'Pending'
+            AND uara.alert_type IN (11, 21)
+            AND EXISTS (
+            SELECT 1
+            FROM ad_tb_upp_nature_2 atun
+            LEFT JOIN ad_tb_upp_nature_2 atun2 ON LOWER(atun.manager1st) = LOWER(atun2.user_name)
+            WHERE LOWER(uara.it_code_of_user) = LOWER(atun.user_name)
+            AND atun2.user_name IS NOT NULL
+            )
+        </where>
+    </update>
+
+
+    <select id="countInvalidBpo" resultType="long">
+        SELECT
+            count (1) AS count
+        FROM user_access_review_alert uara
+        WHERE alert_type in (12, 32)
+            AND alert_handle_status in ('Pending', 'Send');
+    </select>
+    <!--
+        根据实时权限数据恢复 BPO 异常记录，仅处理
+        alert_type=12（BPO ITCode 失效）
+        alert_type=32（人工标记 BPO 失效）
+        且状态为 Pending/Send 的非导入应用数据。
+
+        处理场景：
+        1. real_data IS NULL：实时权限表中不存在对应记录，不恢复，告警状态保持不变。
+        2. real_data IS NOT NULL AND bpo_changed = true：实时 BPO 与告警快照不同，
+           使用实时 BPO 新增回 user_access_review，并将告警标记为 Completed。
+        3. real_data IS NOT NULL AND bpo_changed = false：实时 BPO 为空或与告警快照相同，
+           不恢复，告警状态保持不变。
+
+        注意：该语句最终返回的是 UPDATE 命中的告警记录数，而不是 INSERT 恢复的记录数。
+    -->
+    <update id="restoreDataAndUpdateBPO">
+        WITH alert_records AS (
+            -- 第一步：取得待处理告警，并按权限记录的完整业务键匹配实时权限数据
+            SELECT
+                a.*,
+                -- 保留告警快照中的原始值，便于识别数据来源和后续比较
+                a.bpo AS alert_bpo,
+                a.alert_handle_status AS original_alert_status,
+                -- LEFT JOIN 未命中时为 NULL，用于区分“实时记录不存在”
+                r.cmdb_id AS real_data,
+                -- 实际恢复值优先取权限级 BPO；为空时回退到应用级 BPO
+                CASE
+                    WHEN TRIM(r.bpo) != '' THEN r.bpo
+                    WHEN TRIM(r.app_bpo) != '' THEN r.app_bpo
+                    ELSE NULL
+                    END AS real_bpo,
+                -- BPO 邮箱与 BPO 使用相同的权限级优先、应用级回退规则
+                CASE
+                    WHEN TRIM(r.bpo_email) != '' THEN r.bpo_email
+                    WHEN TRIM(r.app_bpo_email) != '' THEN r.app_bpo_email
+                    ELSE NULL
+                    END AS real_bpo_email,
+                r.app_bpo AS real_app_bpo,
+                r.app_bpo_email AS real_app_bpo_email,
+                -- 判断实时有效 BPO 是否相对告警快照发生变化
+                CASE
+                -- 实时记录没有权限级/应用级 BPO 时无值可恢复，统一判为未变更
+                WHEN NULLIF(TRIM(COALESCE(r.bpo, '')), '') IS NULL
+                    AND NULLIF(TRIM(COALESCE(r.app_bpo, '')), '') IS NULL
+                THEN false
+                -- 将实时 BPO 的逗号分隔符统一为分号后，与告警快照进行 NULL 安全比较
+                WHEN a.bpo IS NOT DISTINCT FROM
+                    REPLACE(
+                        COALESCE(
+                            NULLIF(TRIM(COALESCE(r.bpo, '')), ''),
+                            NULLIF(TRIM(COALESCE(r.app_bpo, '')), '')
+                        ),
+                        ',', ';'
+                    )
+                THEN false
+                ELSE true
+                END AS bpo_changed
+            FROM user_access_review_alert a
+            LEFT JOIN its_application_access_data r
+                ON r.cmdb_id = a.cmdb_id
+                AND r.user_it_code = a.it_code_of_user
+                AND r.user_id = a.user_id
+                AND r.system_role_id = a.system_role_id
+                AND r.system_role = a.system_role
+            WHERE a.alert_type IN (12, 32)
+                AND a.alert_handle_status in ('Pending', 'Send')
+                -- IMPORT 应用的数据不进入实时权限表，当前无法按本逻辑恢复，暂不处理
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM its_application_data iad
+                    WHERE iad.cmdb_id = a.cmdb_id
+                    AND iad.data_source = 'IMPORT'
+                )
+        ),
+
+        -- 第二步：仅当实时 BPO 去重后恰好为一个 ItCode 时，从 UPP 推导其 CoC 类型
+        -- 多个 BPO、没有 BPO、UPP 未匹配或 coc_flag 非 Y/N 时，real_bpo_coc_type 均为 NULL
+        enriched_alert_records AS (
+            SELECT
+                ar.*,
+                CASE
+                    WHEN (
+                        SELECT COUNT(DISTINCT LOWER(TRIM(bpo_item)))
+                        FROM regexp_split_to_table(COALESCE(ar.real_bpo, ''), '[,;]') AS bpo_item
+                        WHERE TRIM(bpo_item) != ''
+                    ) = 1
+                    THEN (
+                        SELECT CASE
+                            WHEN UPPER(TRIM(upp.coc_flag)) IN ('Y', 'N')
+                                THEN UPPER(TRIM(upp.coc_flag))
+                            ELSE NULL
+                        END
+                        FROM regexp_split_to_table(COALESCE(ar.real_bpo, ''), '[,;]') AS bpo_item
+                        LEFT JOIN ad_tb_upp_nature_2 upp
+                            ON LOWER(upp.user_name) = LOWER(TRIM(bpo_item))
+                        WHERE TRIM(bpo_item) != ''
+                        LIMIT 1
+                    )
+                    ELSE NULL
+                END AS real_bpo_coc_type
+            FROM alert_records ar
+        ),
+
+        -- 第三步：仅恢复“实时记录存在且 BPO 已变化”的记录
+        -- 复制告警快照中的审核字段，BPO/邮箱/应用级 BPO/CoC 改用实时数据
+        insert_changed AS (
+            INSERT INTO user_access_review (
+                id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,email,user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_band_ed_flag,line_manager_level_code,dept,line_manager,line_manager_email,it_code_of_bpo,
+                bpo,bpo_email,user_coc_type,bpo_coc_type,bpo_update_by,bpo_update_time,app_bpo,app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+                line_manager_review_status, line_managers_review_decision, line_manager_review_itcode, line_manager_review_time,
+                bpo_review_status, bpo_review_decision, bpo_review_itcode, bpo_review_time,
+                update_by, update_time, create_by, create_time
+            )
+            SELECT
+                id,sequence_number,uuid,cmdb_id,uar_id,app_name,it_code_of_user,email,user_name,user_real_name,system_role_id,system_role,role_description,role_valid_to,country,department,user_id,user_id_valid_to,user_id_lock,access_label,line_manager_band_ed_flag,line_manager_level_code,dept,line_manager,line_manager_email,it_code_of_bpo,
+                REPLACE(real_bpo, ',', ';'), REPLACE(real_bpo_email, ',', ';'), user_coc_type,real_bpo_coc_type,bpo_update_by,bpo_update_time, real_app_bpo,real_app_bpo_email,backup_bpo,backup_bpo_email,backup_bpo_band_ed_flag,bpo_band_ed_flag,app_bpo_band_ed_flag,leit_system_name,leit_system_id,access_review_decision,first_line_manager,second_line_manager,audit_trail,authorization_technical_name,authorization_description,authorization_valid_to,overall_send_status,current_round,delete_flag,
+                line_manager_review_status, line_managers_review_decision, line_manager_review_itcode, line_manager_review_time,
+                bpo_review_status, bpo_review_decision, bpo_review_itcode, bpo_review_time,
+                'BPO_ALERT_REVERT', CURRENT_TIMESTAMP, 'ALERT_REVERT', CURRENT_TIMESTAMP
+            FROM enriched_alert_records
+            WHERE real_data IS NOT NULL
+            AND bpo_changed = true
+        ),
+
+        -- 第四步：建立本次成功恢复的告警 ID 与目标状态映射
+        -- 未匹配实时数据或 BPO 未变化的告警不会进入该集合
+        mark_status AS (
+            SELECT
+                id,
+                'Completed' AS new_status
+            FROM enriched_alert_records
+            WHERE
+                real_data IS NOT NULL
+                AND bpo_changed = true
+        )
+
+        -- 第五步：只将已恢复记录对应的有效告警更新为 Completed
+        UPDATE user_access_review_alert
+        SET alert_handle_status = ms.new_status,
+            update_by = 'JOB',
+            update_time = CURRENT_TIMESTAMP
+        FROM mark_status ms
+        WHERE user_access_review_alert.id = ms.id
+            AND user_access_review_alert.alert_type IN (12, 32)
+            AND user_access_review_alert.alert_handle_status in ('Pending', 'Send');
+
+    </update>
+
+
+    <!--获取需要发送itCode失效邮件的信息-->
+    <select id="getNeedDataByAlert" resultType="com.lenovo.bean.UarAlertBean">
+        SELECT
+            iad.operation_focal,
+            iad.operation_owner,
+            iad.cmdb_id,
+            (SELECT COUNT(1) FROM user_access_review_alert uara WHERE uara.cmdb_id IS NOT NULL AND uara.alert_type = #{bean.alertType} and iad.cmdb_id = uara.cmdb_id) AS total_alert_cmdb
+        FROM its_application_data iad
+        WHERE iad.cmdb_id IN (
+            SELECT DISTINCT uara_inner.cmdb_id FROM user_access_review_alert uara_inner
+            WHERE uara_inner.cmdb_id IS NOT NULL
+              AND uara_inner.alert_type = 12
+              AND uara_inner.alert_handle_status IN ('Pending','Send'))
+    </select>
+
+    <select id="getAlertsForExport" resultType="com.lenovo.bean.UarAlertBean">
+        SELECT
+            <include refid="Base_Column" />
+        FROM user_access_review_alert uara
+        LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uara.it_code_of_user) = LOWER(atun.user_name)
+        LEFT JOIN its_application_data app ON uara.cmdb_id = app.cmdb_id
+        <include refid="Base_Conditions"/>
+        order by
+        <choose>
+            <when test='request.sortField != null and request.sortField != ""'>
+                ${request.sortField}
+            </when>
+            <otherwise>
+                uara.create_time
+            </otherwise>
+        </choose>
+        <choose>
+            <when test='request.sortOrder != null and request.sortOrder != ""'>
+                ${request.sortOrder}
+            </when>
+            <otherwise>
+                DESC
+            </otherwise>
+        </choose>
+     </select>
+
+
+    <sql id="Alert_Bpo_Summary">
+        SELECT
+        app.cmdb_id,
+        app.application_name as appName,
+        app.operation_owner as operationOwner,
+        app.operation_focal as operationFocal,
+        app.operation_owner_domain as operationOwnerDomain,
+        app.operation_owner_tower as operationOwnerTower,
+        uara.alert_type as alertType,
+        <if test="request.language != null and request.language != ''">
+            <choose>
+                <when test="request.language == 'CN'">
+                    CASE
+                    WHEN uara.alert_type = 10 THEN '用户 ITcode 失效'
+                    WHEN uara.alert_type = 11 THEN '直属经理 ITcode 失效'
+                    WHEN uara.alert_type = 12 THEN 'BPO ITcode 失效'
+                    WHEN uara.alert_type = 21 THEN '直属经理变更'
+                    WHEN uara.alert_type = 32 THEN '人工标记BPO失效'
+                    ELSE '未知' END as alertTypeStr,
+                </when>
+                <otherwise>
+                    CASE
+                    WHEN uara.alert_type = 10 THEN 'User''s ITcode has expired'
+                    WHEN uara.alert_type = 11 THEN 'Line manager''s ITcode has expired'
+                    WHEN uara.alert_type = 12 THEN 'BPO''s ITcode has expired'
+                    WHEN uara.alert_type = 21 THEN 'Line manager has changed'
+                    WHEN uara.alert_type = 32 THEN 'Manually marked BPO failure'
+                    ELSE 'Unknown' END as alertTypeStr,
+                </otherwise>
+            </choose>
+        </if>
+        uara.system_role as systemRole,
+        uara.bpo as bpo
+        FROM user_access_review_alert uara
+        LEFT JOIN its_application_data app ON uara.cmdb_id = app.cmdb_id
+        <include refid="Base_Conditions"/>
+        GROUP BY app.cmdb_id, app.application_name, app.operation_owner, app.operation_focal, app.operation_owner_domain, app.operation_owner_tower, uara.alert_type, uara.system_role, uara.bpo
+        ORDER BY
+        <choose>
+            <when test='request.sortField != null and request.sortField != ""'>
+                ${request.sortField}
+            </when>
+            <otherwise>
+                app.cmdb_id
+            </otherwise>
+        </choose>
+        <choose>
+            <when test='request.sortOrder != null and request.sortOrder != ""'>
+                ${request.sortOrder}
+            </when>
+            <otherwise>
+                ASC
+            </otherwise>
+        </choose>
+    </sql>
+
+    <select id="getAlertBpoSummary" resultType="com.lenovo.bean.UarAlertBpoBean">
+        <include refid="Alert_Bpo_Summary"/>
+    </select>
+
+    <select id="getAllAlertBpoSummary" resultType="com.lenovo.bean.UarAlertBean">
+        <include refid="Alert_Bpo_Summary"/>
+    </select>
+
+    <select id="getAlertInvalidBpoList" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+        sub.value AS label,
+        sub.value AS value
+        FROM
+        (
+            SELECT DISTINCT TRIM(unnest(string_to_array(lower(uara.bpo), ';'))) AS value
+            FROM user_access_review_alert uara
+            <include refid="Base_Conditions"/>
+            order by value
+        ) AS sub
+    </select>
+
+</mapper>

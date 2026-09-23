@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UarCycleSettingMapper">
+
+
+    <select id="queryList" resultType="com.lenovo.bean.UarCycleSettingBean">
+        SELECT
+        *
+        FROM uar_cycle_setting
+        WHERE 1=1
+        <if test="uarName != null and uarName != ''">
+            AND uar_name LIKE '%'||#{uarName}||'%'
+        </if>
+        ORDER BY uar_id DESC
+    </select>
+
+    <select id="getCurrentUarId" resultType="java.lang.String">
+        SELECT
+        uar_id
+        FROM uar_cycle_setting
+        WHERE is_current = 1
+    </select>
+
+    <select id="isCurrentDateWithinCycleRange" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM uar_cycle_setting
+            WHERE is_current = 1
+              AND default_cycle_start_date IS NOT NULL
+              AND default_cycle_end_date IS NOT NULL
+              AND CURRENT_DATE BETWEEN default_cycle_start_date AND default_cycle_end_date
+        )
+    </select>
+
+    <select id="queryIsCurrent" resultType="java.lang.Integer">
+        SELECT
+        is_current
+        FROM uar_cycle_setting
+        WHERE uar_id = #{uarCycleId}
+    </select>
+
+    <update id="resetUarCycleSetting">
+        UPDATE
+        uar_cycle_setting
+        SET is_current = 0
+        WHERE is_current = 1
+    </update>
+</mapper>

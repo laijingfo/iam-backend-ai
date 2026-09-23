@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.LineMangerBandReviewMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.UserAccessReview">
+        <result property="sequenceNumber" column="sequence_number" jdbcType="VARCHAR"/>
+        <result property="itCodeOfUser" column="it_code_of_user" jdbcType="VARCHAR"/>
+        <result property="email" column="email" jdbcType="VARCHAR"/>
+        <result property="userName" column="user_name" jdbcType="VARCHAR"/>
+        <result property="userRealName" column="user_real_name" jdbcType="VARCHAR"/>
+        <result property="country" column="country" jdbcType="INTEGER"/>
+        <result property="department" column="department" jdbcType="BOOLEAN"/>
+        <result property="cmdbId" column="cmdb_id" jdbcType="VARCHAR"/>
+        <result property="appName" column="app_name" jdbcType="VARCHAR"/>
+        <result property="userId" column="user_id" jdbcType="VARCHAR"/>
+        <result property="userIdValidTo" column="user_id_valid_to" jdbcType="DATE"/>
+        <result property="authorizationTechnicalName" column="authorization_technical_name" jdbcType="VARCHAR"/>
+        <result property="authorizationDescription" column="authorization_description" jdbcType="VARCHAR"/>
+        <result property="authorizationValidTo" column="authorization_valid_to" jdbcType="DATE"/>
+        <result property="accessLabel" column="access_label" jdbcType="VARCHAR"/>
+        <result property="secondLineManager" column="second_line_manager" jdbcType="VARCHAR"/>
+        <result property="itCodeOfBpo" column="it_code_of_bpo" jdbcType="VARCHAR"/>
+
+        <result property="bpoReviewDecision" column="bpo_review_decision" jdbcType="VARCHAR"/>
+        <result property="userIdLock" column="user_id_lock" jdbcType="VARCHAR"/>
+        <result property="accessReviewDecision" column="access_review_decision" jdbcType="VARCHAR"/>
+        <result property="auditTrail" column="audit_trail" jdbcType="VARCHAR"/>
+
+        <result property="systemRole" column="system_role" jdbcType="VARCHAR"/>
+        <result property="roleDescription" column="role_description" jdbcType="VARCHAR"/>
+        <result property="bpoReviewStatus" column="bpo_review_status" jdbcType="VARCHAR"/>
+
+        <result property="lineManagerReviewStatus" column="line_manager_review_status" jdbcType="VARCHAR"/>
+        <result property="lineManagersReviewDecision" column="line_managers_review_decision" jdbcType="VARCHAR"/>
+        <result property="finalReviewDecision" column="final_review_decision" jdbcType="VARCHAR"/>
+        <result property="lineManager" column="line_manager" jdbcType="VARCHAR"/>
+        <result property="bpo" column="bpo" jdbcType="VARCHAR"/>
+
+        <result property="bpoEmail" column="bpo_email" jdbcType="VARCHAR"/>
+        <result property="lineManagerEmail" column="line_manager_email" jdbcType="VARCHAR"/>
+        <!-- 新增字段 -->
+        <result property="bpoEmail" column="bpo_email" jdbcType="VARCHAR"/>
+        <result property="lineManagerEmail" column="line_manager_email" jdbcType="VARCHAR"/>
+        <result property="bpoReviewItcode" column="bpo_review_itcode" jdbcType="VARCHAR"/>
+        <result property="bpoReviewTime" column="bpo_review_time" jdbcType="VARCHAR"/>
+        <result property="lineManagerReviewItcode" column="line_manager_review_itcode" jdbcType="VARCHAR"/>
+        <result property="lineManagerReviewTime" column="line_manager_review_time" jdbcType="VARCHAR"/>
+
+    </resultMap>
+
+    <select id="getAllLineManagerBandReview" resultMap="BaseResultMap">
+        SELECT
+        sequence_number,
+        it_code_of_user,
+        email,
+        user_name,
+        user_real_name,
+        country,
+        department,
+        app.cmdb_id,
+        app.application_name as app_name,
+        user_id,
+        user_id_valid_to,
+        authorization_technical_name,
+        authorization_description,
+        authorization_valid_to,
+        first_line_manager,
+        second_line_manager,
+        it_code_of_bpo,
+        user_id_lock,
+        access_review_decision,
+        audit_trail,
+        system_role,
+        role_description,
+        leit_system_id,
+        leit_system_name,
+        final_review_decision,
+        line_manager,
+        bpo,
+        bpo_email,
+        bpo_review_itcode,
+        bpo_review_time,
+        line_manager_email,
+        line_manager_review_itcode,
+        line_manager_review_time,
+        rm.access_label AS access_label,
+
+
+        <!-- 根据语言参数动态转换BPO审核状态 -->
+        <choose>
+            <when test="language != null and language == 'CN'">
+                CASE bpo_review_status
+                WHEN '1' THEN '未审核'
+                WHEN '2' THEN '已审核'
+                ELSE COALESCE(bpo_review_status, '未知')
+                END AS bpo_review_status,
+            </when>
+            <otherwise>
+                CASE bpo_review_status
+                WHEN '1' THEN 'Pending Review'
+                WHEN '2' THEN 'Reviewed'
+                ELSE COALESCE(bpo_review_status, 'Unknown')
+                END AS bpo_review_status,
+            </otherwise>
+        </choose>
+
+        <!-- 根据语言参数动态转换直线经理审核状态 -->
+        <choose>
+            <when test="language != null and language == 'CN'">
+                CASE line_manager_review_status
+                WHEN '1' THEN '未审核'
+                WHEN '2' THEN '已审核'
+                ELSE COALESCE(line_manager_review_status, '未知')
+                END AS line_manager_review_status,
+            </when>
+            <otherwise>
+                CASE line_manager_review_status
+                WHEN '1' THEN 'Pending Review'
+                WHEN '2' THEN 'Reviewed'
+                ELSE COALESCE(line_manager_review_status, 'Unknown')
+                END AS line_manager_review_status,
+            </otherwise>
+        </choose>
+
+        <!-- 根据语言参数动态转换审核决定 -->
+        <choose>
+            <when test="language != null and language == 'CN'">
+                CASE bpo_review_decision
+                WHEN 'keep' THEN '保留'
+                WHEN 'remove' THEN '移除'
+                ELSE COALESCE(bpo_review_decision, '')
+                END AS bpo_review_decision,
+
+                CASE line_managers_review_decision
+                WHEN 'keep' THEN '保留'
+                WHEN 'remove' THEN '移除'
+                ELSE COALESCE(line_managers_review_decision, '')
+                END AS line_managers_review_decision
+            </when>
+            <otherwise>
+                COALESCE(bpo_review_decision, '') AS bpo_review_decision,
+                COALESCE(line_managers_review_decision, '') AS line_managers_review_decision
+            </otherwise>
+        </choose>
+
+        FROM user_access_review rm
+        LEFT JOIN its_application_data app ON rm.cmdb_id = app.cmdb_id
+        <where>
+            rm.delete_flag = false and rm.line_manager_band_ed_flag = '1'
+            <if test="UseAccessReviewBean.itCodeOfUser != null and UseAccessReviewBean.itCodeOfUser != ''">
+                AND rm.it_code_of_user = #{UseAccessReviewBean.itCodeOfUser}
+            </if>
+            <if test="UseAccessReviewBean.appName != null and UseAccessReviewBean.appName != ''">
+                AND app.application_name = #{UseAccessReviewBean.appName}
+            </if>
+            <if test="UseAccessReviewBean.cmdbId != null and UseAccessReviewBean.cmdbId != ''">
+                AND rm.cmdb_id = #{UseAccessReviewBean.cmdbId}
+            </if>
+            <if test="UseAccessReviewBean.bpoReviewStatus != null and UseAccessReviewBean.bpoReviewStatus != ''">
+                AND rm.bpo_review_status = #{UseAccessReviewBean.bpoReviewStatus}
+            </if>
+            <if test="UseAccessReviewBean.bpoReviewDecision != null and UseAccessReviewBean.bpoReviewDecision != ''">
+                AND rm.bpo_review_decision = #{UseAccessReviewBean.bpoReviewDecision}
+            </if>
+            <if test="UseAccessReviewBean.lineManagerReviewStatus != null and UseAccessReviewBean.lineManagerReviewStatus != ''">
+                AND rm.line_manager_review_status = #{UseAccessReviewBean.lineManagerReviewStatus}
+            </if>
+            <if test="UseAccessReviewBean.lineManagersReviewDecision != null and UseAccessReviewBean.lineManagersReviewDecision != ''">
+                AND rm.line_managers_review_decision = #{UseAccessReviewBean.lineManagersReviewDecision}
+            </if>
+            <if test="UseAccessReviewBean.auditTrail != null and UseAccessReviewBean.auditTrail != ''">
+                AND rm.audit_trail = #{UseAccessReviewBean.auditTrail}
+            </if>
+            <if test="UseAccessReviewBean.dataRange != null and UseAccessReviewBean.dataRange.size() > 0">
+                <!-- 列表非空时才进来 -->
+                <choose>
+                    <when test='UseAccessReviewBean.dataRange.contains("*")'>
+                        <!-- 通配符，代表查询全部数据 -->
+                    </when>
+                    <otherwise>
+                        AND rm.cmdb_id IN
+                        <foreach collection="UseAccessReviewBean.dataRange" item="item" open="(" separator=","
+                                 close=")">
+                            #{item}
+                        </foreach>
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="UseAccessReviewBean.accessLabel != null and UseAccessReviewBean.accessLabel != ''">
+                <choose>
+                    <when test="UseAccessReviewBean.accessLabel == 'NULL'">
+                        AND (rm.access_label is null or rm.access_label = '' or rm.access_label = 'LEIT_empty')
+                    </when>
+                    <otherwise>
+                        AND rm.access_label = #{UseAccessReviewBean.accessLabel}
+                    </otherwise>
+                </choose>
+            </if>
+        </where>
+        ORDER BY rm.sequence_number
+    </select>
+
+    <!-- 根据唯一键查询记录 -->
+    <select id="findByUniqueKeys" resultMap="BaseResultMap">
+        SELECT *
+        FROM user_access_review
+        WHERE cmdb_id = #{cmdbId}
+            AND it_code_of_user = #{itCode}
+            AND user_id = #{userId}
+            AND system_role = #{systemRole}
+            AND leit_system_id = #{leitSystemId}
+            AND role_description = #{roleDescription}
+            AND delete_flag = false
+            AND line_manager_band_ed_flag = '1'
+        LIMIT 1
+    </select>
+
+    <!-- excel批量更新记录 -->
+    <update id="batchUpdate" parameterType="java.util.List">
+        <foreach collection="list" item="item" separator=";">
+            UPDATE user_access_review
+            <set>
+                line_manager_review_status ='2',
+                line_managers_review_decision = #{item.lineManagersReviewDecision},
+                line_manager_review_time = CURRENT_TIMESTAMP,
+                line_manager_review_itcode = #{lineManagerReviewItcode},
+            </set>
+            WHERE
+            delete_flag = false AND line_manager_band_ed_flag = '1'
+            <!-- 使用动态条件判断 -->
+            <choose>
+                <!-- 当所有条件都为空时，使用 1=0 避免全表更新 -->
+                <when test="
+                        (item.id == null or item.id == '')
+                          ">
+                    AND 1 = 0
+                </when>
+                <otherwise>
+                    AND id = #{item.id}
+                </otherwise>
+            </choose>
+        </foreach>
+    </update>
+
+    <select id="findBySequenceNumber" resultMap="BaseResultMap">
+        SELECT *
+        FROM user_access_review
+        WHERE sequence_number = #{sequenceNumber}
+        AND delete_flag = false
+    </select>
+
+
+</mapper>

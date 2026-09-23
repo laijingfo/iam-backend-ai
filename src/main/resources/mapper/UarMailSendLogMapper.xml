@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UarMailSendLogMapper">
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.UarMailSendLog">
+        <id property="id" column="id" jdbcType="BIGINT"/>
+        <result property="templateId" column="template_id" jdbcType="BIGINT"/>
+        <result property="recipientEmails" column="recipient_emails" jdbcType="VARCHAR"/>
+        <result property="ccEmails" column="cc_emails" jdbcType="VARCHAR"/>
+        <result property="subject" column="subject" jdbcType="VARCHAR"/>
+        <result property="content" column="content" jdbcType="VARCHAR"/>
+        <result property="senderAlias" column="sender_alias" jdbcType="VARCHAR"/>
+        <result property="sendTime" column="send_time" jdbcType="TIMESTAMP"/>
+        <result property="status" column="status" jdbcType="VARCHAR"/>
+        <result property="errorMessage" column="error_message" jdbcType="VARCHAR"/>
+        <result property="batchNo" column="batch_no" jdbcType="VARCHAR"/>
+        <result property="sendFlag" column="send_flag" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, template_id, recipient_emails, cc_emails, subject, content, sender_alias, send_time, status, error_message, batch_no, send_flag
+    </sql>
+
+    <select id="query" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM
+        uar_mail_send_log
+        <where>
+            <if test="bean.templateId != null and bean.templateId != ''">
+                AND template_id = #{bean.templateId}
+            </if>
+            <if test="bean.status != null and bean.status != ''">
+                AND status = #{bean.status}
+            </if>
+            <if test="bean.subject != null and bean.subject != ''">
+                AND subject LIKE CONCAT('%', #{bean.subject}, '%')
+            </if>
+            <if test="bean.recipientEmails != null and bean.recipientEmails != ''">
+                AND recipient_emails LIKE CONCAT('%', #{bean.recipientEmails}, '%')
+            </if>
+
+        </where>
+        ORDER BY send_time DESC
+    </select>
+</mapper>

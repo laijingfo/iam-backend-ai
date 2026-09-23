@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.ComplianceControlMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.ComplianceControl">
+            <result property="id" column="id" jdbcType="INTEGER"/>
+            <result property="categoryId" column="category_id" jdbcType="VARCHAR"/>
+            <result property="category" column="category" jdbcType="VARCHAR"/>
+            <result property="complianceId" column="compliance_id" jdbcType="VARCHAR"/>
+            <result property="complianceControl" column="compliance_control" jdbcType="VARCHAR"/>
+            <result property="controlStatus" column="control_status" jdbcType="BOOLEAN"/>
+            <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
+            <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
+            <result property="lastModifier" column="last_modifier" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,category_id,category,
+        compliance_id,compliance_control,control_status,
+        update_time,create_time,last_modifier
+    </sql>
+</mapper>

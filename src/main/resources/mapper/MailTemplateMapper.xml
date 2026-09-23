@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.MailTemplateMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.MailTemplate">
+        <id property="id" column="id" jdbcType="INTEGER"/>
+        <result property="title" column="title" jdbcType="VARCHAR"/>
+        <result property="bannerImg" column="banner_img" jdbcType="VARCHAR"/>
+        <result property="content" column="content" jdbcType="VARCHAR"/>
+        <result property="period" column="period" jdbcType="VARCHAR"/>
+        <result property="receivers" column="receivers" jdbcType="VARCHAR"/>
+        <result property="cc" column="cc" jdbcType="VARCHAR"/>
+        <result property="sender" column="sender" jdbcType="VARCHAR"/>
+        <result property="isDraft" column="is_draft" jdbcType="BOOLEAN"/>
+        <result property="activeStatus" column="active_status" jdbcType="SMALLINT"/>
+        <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
+        <result property="lastSendTime" column="last_send_time" jdbcType="TIMESTAMP"/>
+        <result property="startTime" column="start_time" jdbcType="TIMESTAMP"/>
+        <result property="endTime" column="end_time" jdbcType="TIMESTAMP"/>
+        <result property="owner" column="owner" jdbcType="VARCHAR"/>
+        <result property="repeatString" column="repeat_string" jdbcType="VARCHAR"/>
+        <result property="signatures" column="signatures" jdbcType="VARCHAR"/>
+        <result property="workspaceId" column="workspace_id" jdbcType="INTEGER"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,title,banner_img,
+        content,period,receivers,
+        cc,sender,is_draft,
+        active_status,update_time,last_send_time,
+        start_time,end_time,owner,
+        repeat_string,signatures,workspace_id
+    </sql>
+    <insert id="saveCapture">
+        delete from mail_captures
+        where mail_id = #{mailId};
+        <if test="sourceFroms != null and sourceFroms.size() > 0">
+            insert into mail_captures(mail_id, capture_id)
+            values
+            <foreach collection="sourceFroms" item="item" separator=",">
+                (#{mailId}, #{item.id})
+            </foreach>
+        </if>
+    </insert>
+    <select id="getThirdToken" resultType="com.lenovo.entity.ThirdToken">
+        select *
+        from third_token
+        where name = #{name}
+    </select>
+    <select id="getSourceFrom" resultType="com.lenovo.entity.CaptureSourceFrom">
+        select csf.*
+        from mail_captures mc
+                 left join capture_source_from csf on mc.capture_id = csf.id
+        where mc.mail_id = #{id}
+    </select>
+    <select id="querySubscriptionForNotify" resultType="com.lenovo.entity.MailTemplate">
+        select *
+        from mail_template
+        where active_status = 1
+          and is_draft = false
+          and start_time &lt;= now()
+          and end_time &gt;= now()
+    </select>
+    <select id="getBanners" resultType="com.lenovo.entity.S3File">
+        select *
+        from default_banners
+                 left join s3_file on default_banners.file_id = s3_file.id
+    </select>
+
+    <select id="query" resultMap="BaseResultMap">
+    select  * from  mail_template
+    <where>
+        <if test="mailTemplate.receivers != null and mailTemplate.receivers != ''">
+            receivers LIKE '%' || #{mailTemplate.receivers} || '%'
+        </if>
+        <if test="mailTemplate.activeStatus!=null ">
+            AND     active_status=#{mailTemplate.activeStatus}
+        </if>
+
+    </where>
+        order by id desc
+    </select>
+
+    <select id="receiversList" resultType="com.lenovo.bean.RiskManagementcomplianceStatusBean">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        from (
+            SELECT DISTINCT unnest(STRING_TO_ARRAY(receivers, ','))  AS label
+            FROM mail_template  ) as sub
+
+    </select>
+    <delete id="deleteById">
+        delete  from mail_template where id=#{id}
+
+    </delete>
+
+</mapper>

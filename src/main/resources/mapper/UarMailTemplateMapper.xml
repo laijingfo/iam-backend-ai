@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UarMailTemplateMapper">
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.UarMailTemplate">
+        <id property="id" column="id" jdbcType="BIGINT"/>
+        <result property="version" column="version" jdbcType="VARCHAR"/>
+        <result property="tag" column="tag" jdbcType="VARCHAR"/>
+        <result property="content" column="content" jdbcType="VARCHAR"/>
+<!--        <result property="createDate" column="create_date" jdbcType="TIMESTAMP"/>-->
+        <result property="theme" column="theme" jdbcType="VARCHAR"/>
+        <result property="banner" column="banner" jdbcType="VARCHAR"/>
+        <result property="subject" column="subject" jdbcType="VARCHAR"/>
+        <result property="toSomeone" column="to_someone" jdbcType="VARCHAR"/>
+        <result property="dueDate" column="due_date" jdbcType="TIMESTAMP"/>
+        <result property="operator" column="operator" jdbcType="VARCHAR"/>
+        <result property="operationDate" column="operation_date" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, version, tag, content,  theme, banner, subject, to_someone, due_date,operator, operation_date
+    </sql>
+
+    <select id="query" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM
+        uar_mail_template
+        <where>
+            <if test="bean.tag != null and bean.tag != ''">
+                AND tag LIKE '%' || #{bean.tag} || '%'
+            </if>
+            <if test="bean.content != null and bean.content != ''">
+                AND content LIKE '%' || #{bean.content} || '%'
+            </if>
+            <if test="bean.toSomeone != null and bean.toSomeone != ''">
+                AND to_someone = #{bean.toSomeone}
+            </if>
+            <!-- 可以添加对 operation_date 的查询条件 -->
+            <if test="bean.operationDate != null">
+                AND operation_date = #{bean.operationDate}
+            </if>
+            <if test="bean.operator != null and bean.operator != ''">
+                AND operator LIKE '%' || #{bean.operator} || '%'
+            </if>
+        </where>
+        order by operation_date desc, tag, version desc <!-- 按操作时间排序 -->
+    </select>
+    <!-- 获取指定tag和toSomeone的最大版本号 -->
+    <select id="getMaxVersionByTagAndToSomeone" resultType="java.lang.Integer">
+        SELECT MAX(CAST(version AS INTEGER))
+        FROM uar_mail_template
+        WHERE tag = #{tag} AND to_someone = #{toSomeone}
+    </select>
+
+    <!-- 获取全局最大版本号（tag为空或空字符串） -->
+    <select id="getMaxGlobalVersion" resultType="java.lang.Integer">
+        SELECT MAX(CAST(version AS INTEGER))
+        FROM uar_mail_template
+        WHERE to_someone = 'ToApplicationOwner'
+    </select>
+    <!-- 获取特定tag和toSomeone的所有模板 -->
+    <select id="getTemplatesByTagAndToSomeone" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM
+        uar_mail_template
+        <where>
+            <if test="tag != null and tag != ''">
+                AND tag = #{tag}
+            </if>
+            <if test="toSomeone != null and toSomeone != ''">
+                AND to_someone = #{toSomeone}
+            </if>
+        </where>
+        ORDER BY CAST(version AS INTEGER) DESC
+    </select>
+
+    <!--获取to_someone=ToUarProcessor,ToLineManager,ToBPO,ToUser,ToDelegatee的最大版本号的数据-->
+    <select id="getMaxVersion" resultType="com.lenovo.entity.UarMailTemplate">
+        SELECT t.*
+        FROM uar_mail_template t
+        INNER JOIN (
+            SELECT tag, MAX(version::integer) AS max_version_num
+            FROM uar_mail_template
+            WHERE
+            to_someone= #{bean.toSomeone}
+            <if test="bean.content != null and bean.content != ''">
+                AND theme LIKE '%' || #{bean.content} || '%'
+            </if>
+            GROUP BY tag
+        ) AS sub ON
+        t.to_someone = #{bean.toSomeone}
+        AND t.tag = sub.tag
+        AND t.version::integer = sub.max_version_num
+        ORDER BY t.tag
+    </select>
+</mapper>

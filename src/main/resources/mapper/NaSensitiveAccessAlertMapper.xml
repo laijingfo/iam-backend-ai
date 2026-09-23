@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.NaSensitiveAccessAlertMapper">
+
+    <sql id="CurrentViolations">
+        SELECT DISTINCT ON (
+            iaad.cmdb_id,
+            TRIM(iaad.user_it_code)::citext,
+            COALESCE(TRIM(iaad.user_id), ''),
+            COALESCE(TRIM(iaad.system_role_id), ''),
+            TRIM(iaad.system_role)
+        )
+            iaad.cmdb_id,
+            iaad.application_name AS app_name,
+            TRIM(iaad.user_it_code)::citext AS user_it_code,
+            TRIM(iaad.user_id) AS user_id,
+            TRIM(iaad.system_role_id) AS system_role_id,
+            TRIM(iaad.system_role) AS system_role,
+            iaad.role_description
+        FROM its_application_access_data iaad
+        INNER JOIN ad_tb_upp_nature_2 upp
+            ON LOWER(TRIM(upp.user_name)) = LOWER(TRIM(iaad.user_it_code))
+        WHERE UPPER(TRIM(upp.coc_flag)) = 'Y'
+          AND LOWER(TRIM(iaad.access_label)) = 'sensitive'
+          AND NULLIF(TRIM(iaad.cmdb_id), '') IS NOT NULL
+          AND NULLIF(TRIM(iaad.user_it_code), '') IS NOT NULL
+          AND NULLIF(TRIM(iaad.system_role), '') IS NOT NULL
+        ORDER BY
+            iaad.cmdb_id,
+            TRIM(iaad.user_it_code)::citext,
+            COALESCE(TRIM(iaad.user_id), ''),
+            COALESCE(TRIM(iaad.system_role_id), ''),
+            TRIM(iaad.system_role),
+            iaad.id
+    </sql>
+
+    <insert id="insertNewAlerts">
+        WITH current_violations AS (
+            <include refid="CurrentViolations"/>
+        )
+        INSERT INTO na_sensitive_access_alert (
+            cmdb_id, app_name, user_it_code, user_id, user_coc_type,
+            system_role_id, system_role, role_description, role_classification,
+            alert_status, alert_trigger_time, create_by, create_time, update_by, update_time
+        )
+        SELECT
+            current.cmdb_id,
+            current.app_name,
+            current.user_it_code,
+            current.user_id,
+            'Y',
+            current.system_role_id,
+            current.system_role,
+            current.role_description,
+            'sensitive',
+            'Pending',
+            CURRENT_TIMESTAMP,
+            #{operator},
+            CURRENT_TIMESTAMP,
+            #{operator},
+            CURRENT_TIMESTAMP
+        FROM current_violations current
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM na_sensitive_access_alert alert
+            WHERE alert.cmdb_id = current.cmdb_id
+              AND alert.user_it_code = current.user_it_code
+              AND alert.user_id IS NOT DISTINCT FROM current.user_id
+              AND alert.system_role_id IS NOT DISTINCT FROM current.system_role_id
+              AND alert.system_role = current.system_role
+              AND alert.alert_status IN ('Pending', 'Suppressed')
+        )
+        ON CONFLICT DO NOTHING
+    </insert>
+
+    <update id="resolveMissingAlerts">
+        WITH current_violations AS (
+            <include refid="CurrentViolations"/>
+        )
+        UPDATE na_sensitive_access_alert alert
+        SET alert_status = 'Resolved',
+            resolved_time = CURRENT_TIMESTAMP,
+            update_by = #{operator},
+            update_time = CURRENT_TIMESTAMP
+        WHERE alert.alert_status = 'Pending'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM current_violations current
+              WHERE alert.cmdb_id = current.cmdb_id
+                AND alert.user_it_code = current.user_it_code
+                AND alert.user_id IS NOT DISTINCT FROM current.user_id
+                AND alert.system_role_id IS NOT DISTINCT FROM current.system_role_id
+                AND alert.system_role = current.system_role
+          )
+    </update>
+
+    <sql id="AlertColumns">
+        alert.id,
+        alert.cmdb_id AS cmdbId,
+        alert.app_name AS appName,
+        alert.user_it_code AS userItCode,
+        alert.user_id AS userId,
+        alert.user_coc_type AS userCocType,
+        alert.system_role_id AS systemRoleId,
+        alert.system_role AS systemRole,
+        alert.role_description AS roleDescription,
+        alert.role_classification AS roleClassification,
+        alert.alert_status AS alertStatus,
+        alert.alert_trigger_time AS alertTriggerTime,
+        alert.resolved_time AS resolvedTime,
+        alert.suppressed_by AS suppressedBy,
+        alert.suppressed_time AS suppressedTime,
+        alert.suppressed_reason AS suppressedReason,
+        alert.suppressed_requested_by AS suppressedRequestedBy,
+        alert.last_send_time AS lastSendTime,
+        alert.create_by AS createBy,
+        alert.create_time AS createTime,
+        alert.update_by AS updateBy,
+        alert.update_time AS updateTime,
+        app.operation_owner AS operationOwner,
+        app.operation_focal AS operationFocal
+    </sql>
+
+    <sql id="AlertListColumns">
+        alert.id,
+        alert.cmdb_id AS cmdbId,
+        alert.app_name AS appName,
+        alert.user_it_code AS userItCode,
+        alert.user_id AS userId,
+        alert.user_coc_type AS userCocType,
+        alert.system_role_id AS systemRoleId,
+        alert.system_role AS systemRole,
+        alert.role_description AS roleDescription,
+        'NA-Sensitive' AS roleClassification,
+        alert.alert_status AS alertStatus,
+        alert.alert_trigger_time::date AS alertTriggerTime,
+        alert.resolved_time::date AS resolvedTime,
+        alert.suppressed_by AS suppressedBy,
+        alert.suppressed_time::date AS suppressedTime,
+        alert.suppressed_reason AS suppressedReason,
+        alert.suppressed_requested_by AS suppressedRequestedBy
+    </sql>
+
+    <sql id="AlertConditions">
+        <where>
+            <if test="request.cmdbId != null and request.cmdbId != ''">
+                AND alert.cmdb_id = #{request.cmdbId}
+            </if>
+            <if test="request.appName != null and request.appName != ''">
+                AND alert.app_name = #{request.appName}
+            </if>
+            <if test="request.userItCode != null and request.userItCode != ''">
+                AND alert.user_it_code = #{request.userItCode}
+            </if>
+            <if test="request.userId != null and request.userId != ''">
+                AND LOWER(alert.user_id) = LOWER(#{request.userId})
+            </if>
+            <if test="request.systemRoleId != null and request.systemRoleId != ''">
+                AND LOWER(alert.system_role_id) = LOWER(#{request.systemRoleId})
+            </if>
+            <if test="request.systemRole != null and request.systemRole != ''">
+                AND alert.system_role ILIKE '%' || #{request.systemRole} || '%'
+            </if>
+            <if test="request.alertStatus != null and request.alertStatus != ''">
+                AND alert.alert_status = ANY(string_to_array(replace(#{request.alertStatus}, ' ', ''), ','))
+            </if>
+            <if test="request.alertTriggerStart != null">
+                AND alert.alert_trigger_time &gt;= #{request.alertTriggerStart}
+            </if>
+            <if test="request.alertTriggerEnd != null">
+                AND alert.alert_trigger_time &lt;= #{request.alertTriggerEnd}
+            </if>
+            <choose>
+                <when test='request.dataRange != null and request.dataRange.contains("*")'>
+                    <!-- UAR administrators can view all alerts. -->
+                </when>
+                <otherwise>
+                    AND alert.cmdb_id IN
+                    <foreach collection="request.dataRange" item="cmdbId" open="(" separator="," close=")">
+                        #{cmdbId}
+                    </foreach>
+                </otherwise>
+            </choose>
+        </where>
+    </sql>
+
+    <select id="selectAlertPage" resultType="com.lenovo.bean.NaSensitiveAccessAlertBean">
+        SELECT <include refid="AlertListColumns"/>
+        FROM na_sensitive_access_alert alert
+        <include refid="AlertConditions"/>
+        ORDER BY
+        <choose>
+            <when test="request.sortField != null and request.sortField != ''">
+                ${request.sortField}
+            </when>
+            <otherwise>
+                alertTriggerTime
+            </otherwise>
+        </choose>
+        <choose>
+            <when test="request.sortOrder == 'asc' or request.sortOrder == 'ascend'">ASC</when>
+            <otherwise>DESC</otherwise>
+        </choose>, alert.id DESC
+    </select>
+
+    <select id="selectAlertCount" resultType="long">
+        SELECT COUNT(1)
+        FROM na_sensitive_access_alert alert
+        <include refid="AlertConditions"/>
+    </select>
+
+    <select id="selectAlertsForExport" resultType="com.lenovo.bean.NaSensitiveAccessAlertBean">
+        SELECT <include refid="AlertListColumns"/>
+        FROM na_sensitive_access_alert alert
+        <include refid="AlertConditions"/>
+        ORDER BY alert.alert_trigger_time DESC, alert.id DESC
+    </select>
+
+    <update id="suppressAlert">
+        UPDATE na_sensitive_access_alert alert
+        SET alert_status = 'Suppressed',
+            suppressed_by = #{operator},
+            suppressed_time = CURRENT_TIMESTAMP,
+            suppressed_reason = #{suppressedReason},
+            suppressed_requested_by = #{suppressedRequestedBy},
+            update_by = #{operator},
+            update_time = CURRENT_TIMESTAMP
+        WHERE alert.id = #{id}
+          AND alert.alert_status = 'Pending'
+          <choose>
+              <when test='dataRange != null and dataRange.contains("*")'>
+                  <!-- UAR administrators can suppress any pending alert. -->
+              </when>
+              <otherwise>
+                  AND alert.cmdb_id IN
+                  <foreach collection="dataRange" item="cmdbId" open="(" separator="," close=")">
+                      #{cmdbId}
+                  </foreach>
+              </otherwise>
+          </choose>
+    </update>
+
+    <select id="selectPendingAlertsToSend" resultType="com.lenovo.entity.NaSensitiveAccessAlert">
+        SELECT <include refid="AlertColumns"/>
+        FROM na_sensitive_access_alert alert
+        LEFT JOIN its_application_data app ON app.cmdb_id = alert.cmdb_id
+        WHERE alert.alert_status = 'Pending'
+          AND (alert.last_send_time IS NULL OR alert.last_send_time::date &lt; CURRENT_DATE)
+        ORDER BY alert.alert_trigger_time, alert.id
+    </select>
+
+    <update id="updateLastSendTime">
+        UPDATE na_sensitive_access_alert
+        SET last_send_time = #{sendTime}
+        WHERE id = #{id}
+          AND alert_status = 'Pending'
+    </update>
+</mapper>

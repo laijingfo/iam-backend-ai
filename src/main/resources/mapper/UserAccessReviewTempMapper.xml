@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UserAccessReviewTempMapper">
+
+    <!-- 邮件发送记录的结果映射 -->
+    <resultMap id="EmailSendResultMap" type="com.lenovo.entity.UseAccessReviewEmailSend">
+        <id property="id" column="es_id" jdbcType="BIGINT"/>
+        <result property="reviewUuid" column="es_review_uuid" jdbcType="VARCHAR"/>
+        <result property="sendRound" column="es_send_round" jdbcType="INTEGER"/>
+        <result property="sendTime" column="es_send_time" jdbcType="TIMESTAMP"/>
+        <result property="sendStatus" column="es_send_status" jdbcType="VARCHAR"/>
+        <result property="recipientType" column="es_recipient_type" jdbcType="VARCHAR"/>
+        <result property="recipientEmail" column="es_recipient_email" jdbcType="VARCHAR"/>
+        <result property="templateId" column="es_template_id" jdbcType="BIGINT"/>
+        <result property="errorMessage" column="es_error_message" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <!-- 临时表的主要结果映射 -->
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.UserAccessReviewTemp" autoMapping="false">
+        <!-- 基础字段映射 -->
+        <result property="uuid" column="uuid" jdbcType="VARCHAR"/>
+        <result property="sequenceNumber" column="sequence_number" jdbcType="VARCHAR"/>
+        <result property="itCodeOfUser" column="it_code_of_user" jdbcType="VARCHAR"/>
+        <result property="cmdbId" column="cmdb_id" jdbcType="VARCHAR"/>
+        <result property="appName" column="app_name" jdbcType="VARCHAR"/>
+        <result property="lineManager" column="line_manager" jdbcType="VARCHAR"/>
+        <result property="lineManagerReviewStatus" column="line_manager_review_status" jdbcType="VARCHAR"/>
+        <result property="lineManagerEmail" column="line_manager_email" jdbcType="VARCHAR"/>
+        <result property="bpo" column="bpo" jdbcType="VARCHAR"/>
+        <result property="bpoReviewStatus" column="bpo_review_status" jdbcType="VARCHAR"/>
+        <result property="bpoEmail" column="bpo_email" jdbcType="VARCHAR"/>
+        <result property="sendFlag" column="send_flag" jdbcType="VARCHAR"/>
+        <result property="userName" column="user_name" jdbcType="VARCHAR"/>
+        <result property="department" column="department" jdbcType="VARCHAR"/>
+        <result property="currentRound" column="current_round" jdbcType="INTEGER"/>
+        <result property="overallSendStatus" column="overall_send_status" jdbcType="VARCHAR"/>
+        <result property="uarId" column="uar_id" jdbcType="VARCHAR"/>
+        <result property="bpoBandEdFlag" column="bpo_band_ed_flag" jdbcType="VARCHAR"/>
+        <result property="lineManagerBandEdFlag" column="line_manager_band_ed_flag" jdbcType="VARCHAR"/>
+        <result property="systemRole" column="system_role" jdbcType="VARCHAR"/>
+        <result property="roleDescription" column="role_description" jdbcType="VARCHAR"/>
+
+        <!-- Line Manager 邮件状态集合 -->
+        <collection property="lineManagerEmailStatus" ofType="com.lenovo.entity.UseAccessReviewEmailSend" resultMap="EmailSendResultMap" columnPrefix="lm_"/>
+        <!-- BPO 邮件状态集合 -->
+        <collection property="bpoEmailStatus" ofType="com.lenovo.entity.UseAccessReviewEmailSend" resultMap="EmailSendResultMap" columnPrefix="bpo_"/>
+    </resultMap>
+
+
+    <!-- 根据sequenceNumbers查询记录（包含邮件状态） -->
+    <select id="selectBySequenceNumbers" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT *
+        FROM user_access_review
+        WHERE 1=1
+        and sequence_number IN
+        <foreach collection="sequenceNumbers" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+
+    <!-- 发送邮件之后批量更新temp表的发送次数 -->
+    <update id="updateCurrentRoundBatch">
+        UPDATE user_access_review t1
+        SET current_round = current_round + 1
+        WHERE t1.sequence_number IN
+        <foreach collection="sequenceNumbers" item="sequenceNumber" open="(" separator="," close=")">
+            #{sequenceNumber}
+        </foreach>
+        <!--WITH update_t1 AS (
+        UPDATE user_access_review t1
+        SET current_round = current_round + 1
+        WHERE t1.sequence_number IN
+        <foreach collection="sequenceNumbers" item="sequenceNumber" open="(" separator="," close=")">
+            #{sequenceNumber}
+        </foreach>
+        RETURNING t1.sequence_number
+        )
+        UPDATE user_access_review_temp t2
+        SET current_round = current_round + 1
+        WHERE t2.sequence_number IN
+        <foreach collection="sequenceNumbers" item="sequenceNumber" open="(" separator="," close=")">
+            #{sequenceNumber}
+        </foreach>
+        AND t2.sequence_number IN (SELECT sequence_number FROM update_t1);-->
+    </update>
+
+    <!--发送邮件统计各种发送状态的邮件数量-->
+    <select id="getSendEmailTotalCount" resultType="int">
+        SELECT COUNT(*) FROM user_access_review
+        where 1=1
+        and overall_send_status = #{overallSendStatus}
+        and delete_flag = false
+        and (COALESCE(bpo_review_status,'') != '2' OR COALESCE(line_manager_review_status,'') != '2')
+        and (COALESCE(bpo_band_ed_flag, '') != '1' OR COALESCE(line_manager_band_ed_flag, '') != '1')
+        <!--<choose>
+            <when test='overallSendStatus == "Sent"'>
+                and current_round &lt;= 6
+            </when>
+            <otherwise>
+                and current_round &lt; 6
+            </otherwise>
+        </choose>-->
+        <choose >
+            <when test='roleFlag == "1"'>
+            </when>
+            <when test='roleFlag == "2" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+    <!--待发送页面统计待发送邮件数量:发送邮件之前统计lm和bpo的数量:邮件数量(lm+bpo)(全选)-->
+    <select id="getBpoAndLineManagerCountByDistinct" resultType="java.util.Map">
+        SELECT COUNT(DISTINCT bpo) as bpoCount,COUNT(DISTINCT line_manager) as lineManagerCount
+        FROM user_access_review WHERE 1=1
+            AND overall_send_status = 'Pending'
+            AND delete_flag = false
+            AND (COALESCE(bpo_review_status, '') != '2' OR COALESCE(line_manager_review_status, '') != '2')
+            AND (COALESCE(bpo_band_ed_flag, '') != '1' OR COALESCE(line_manager_band_ed_flag, '') != '1')
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND it_code_of_user = #{bean.itCodeOfUser}
+        </if>
+        <if test="bean.lineManager != null and bean.lineManager != ''">
+            AND line_manager = #{bean.lineManager}
+        </if>
+        <if test="bean.lineManagerLevelCode != null and bean.lineManagerLevelCode != ''">
+            AND line_manager_level_code = #{bean.lineManagerLevelCode}
+        </if>
+        <if test="bean.dept != null and bean.dept != ''">
+            AND dept = #{bean.dept}
+        </if>
+        <if test="bean.lineManagerReviewStatus != null and bean.lineManagerReviewStatus != ''">
+            AND line_manager_review_status = #{bean.lineManagerReviewStatus}
+        </if>
+        <if test="bean.bpo != null and bean.bpo != ''">
+            AND bpo = #{bean.bpo}
+        </if>
+        <if test="bean.bpoReviewStatus != null and bean.bpoReviewStatus != ''">
+            AND bpo_review_status = #{bean.bpoReviewStatus}
+        </if>
+        <if test="bean.cmdbIdListOfChoose != null and bean.cmdbIdListOfChoose != ''">
+            AND cmdb_id IN
+            <foreach collection="bean.cmdbIdListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <if test="bean.appNameListOfChoose != null and bean.appNameListOfChoose != ''">
+            AND app_name IN
+            <foreach collection="bean.appNameListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+    <!--统计待发送页面待发送邮件数量(单选)-->
+    <select id="getBpoCountDistinctBySequenceNumbers" resultType="java.lang.Integer">
+        SELECT COUNT(distinct bpo) as bpo_number
+        FROM user_access_review
+        WHERE 1=1
+        AND overall_send_status = 'Pending'
+        AND sequence_number IN
+        <foreach collection="sequenceNumbers" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+    <select id="getBpoCountDistinctBySequenceNumbersForFailedSendEmail" resultType="java.lang.Integer">
+        SELECT COUNT(distinct bpo) as bpo_number
+        FROM user_access_review
+        WHERE 1=1
+        AND overall_send_status = 'Failed'
+        AND sequence_number IN
+        <foreach collection="sequenceNumbers" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+
+    <!--统计待发送页面待发送邮件数量(单选)-->
+    <select id="getLineManagerCountDistinctBySequenceNumbers" resultType="java.lang.Integer">
+        SELECT COUNT(distinct line_manager) as lineManager_number
+        FROM user_access_review
+        WHERE 1=1
+        AND overall_send_status = 'Pending'
+        AND sequence_number IN
+        <foreach collection="sequenceNumbers" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+    <select id="getLineManagerCountDistinctBySequenceNumbersForFailedSendEmail" resultType="java.lang.Integer">
+        SELECT COUNT(distinct line_manager) as lineManager_number
+        FROM user_access_review
+        WHERE 1=1
+        AND overall_send_status = 'Failed'
+        AND sequence_number IN
+        <foreach collection="sequenceNumbers" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+
+    <!--发送失败页面统计待发送邮件数量:发送邮件之前统计lm和bpo的数量:邮件数量(lm+bpo)(全选)-->
+    <select id="getBpoAndLineManagerCountByDistinctForFailedSend" resultType="java.util.Map">
+        SELECT COUNT(DISTINCT bpo) as bpoCount,COUNT(DISTINCT line_manager) as lineManagerCount
+        FROM user_access_review WHERE 1=1
+        AND overall_send_status = 'Failed'
+        AND delete_flag = false
+        AND (COALESCE(bpo_review_status, '') != '2' OR COALESCE(line_manager_review_status, '') != '2')
+        AND (COALESCE(bpo_band_ed_flag, '') != '1' OR COALESCE(line_manager_band_ed_flag, '') != '1')
+        <!--<if test="bean.cmdbId != null and bean.cmdbId != ''">
+            AND cmdb_id = #{bean.cmdbId}
+        </if>
+        <if test="bean.appName != null and bean.appName != ''">
+            AND app_name = #{bean.appName}
+        </if>-->
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND it_code_of_user = #{bean.itCodeOfUser}
+        </if>
+        <if test="bean.lineManager != null and bean.lineManager != ''">
+            AND line_manager = #{bean.lineManager}
+        </if>
+        <if test="bean.lineManagerLevelCode != null and bean.lineManagerLevelCode != ''">
+            AND line_manager_level_code = #{bean.lineManagerLevelCode}
+        </if>
+        <if test="bean.dept != null and bean.dept != ''">
+            AND dept = #{bean.dept}
+        </if>
+        <if test="bean.lineManagerReviewStatus != null and bean.lineManagerReviewStatus != ''">
+            AND line_manager_review_status = #{bean.lineManagerReviewStatus}
+        </if>
+        <if test="bean.bpo != null and bean.bpo != ''">
+            AND bpo = #{bean.bpo}
+        </if>
+        <if test="bean.bpoReviewStatus != null and bean.bpoReviewStatus != ''">
+            AND bpo_review_status = #{bean.bpoReviewStatus}
+        </if>
+        <if test="bean.cmdbIdListOfChoose != null and bean.cmdbIdListOfChoose != ''">
+            AND cmdb_id IN
+            <foreach collection="bean.cmdbIdListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <if test="bean.appNameListOfChoose != null and bean.appNameListOfChoose != ''">
+            AND app_name IN
+            <foreach collection="bean.appNameListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+</mapper>

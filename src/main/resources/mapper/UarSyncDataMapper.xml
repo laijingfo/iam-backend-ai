@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UarSyncDataMapper">
+
+    <sql id="Base_Where">
+        <where>
+            <if test="request.cmdbId != null and request.cmdbId != ''">
+                AND iaad.cmdb_id = #{request.cmdbId}
+            </if>
+            <if test="request.appName != null and request.appName != ''">
+                AND iaad.application_name = #{request.appName}
+            </if>
+            <if test="request.itCodeOfUser != null and request.itCodeOfUser != ''">
+                AND iaad.user_it_code = #{request.itCodeOfUser}
+            </if>
+            <if test="request.systemRoleId != null and request.systemRoleId != ''">
+                AND iaad.system_role_id LIKE '%'||#{request.systemRoleId}||'%'
+            </if>
+            <if test="request.systemRole != null and request.systemRole != ''">
+                AND iaad.system_role LIKE '%'||#{request.systemRole}||'%'
+            </if>
+            <if test="request.systemRoleType != null and request.systemRoleType != ''">
+                <choose>
+                    <when test="request.systemRoleType == 'NULL'">
+                        AND (iaad.system_role_type is null or iaad.system_role_type = '' or iaad.system_role_type = 'LEIT_empty')
+                    </when>
+                    <otherwise>
+                        AND iaad.system_role_type = #{request.systemRoleType}
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="request.roleDescription != null and request.roleDescription != ''">
+                AND iaad.role_description LIKE '%'||#{request.roleDescription}||'%'
+            </if>
+            <if test="request.accessLabel != null and request.accessLabel != ''">
+                <choose>
+                    <when test="request.accessLabel == 'NULL'">
+                        AND (iaad.access_label is null or iaad.access_label = '' or iaad.access_label = 'LEIT_empty')
+                    </when>
+                    <otherwise>
+                        AND iaad.access_label = #{request.accessLabel}
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="request.lineManager != null and request.lineManager != ''">
+                AND iaad.line_manager = #{request.lineManager}
+            </if>
+            <if test="request.lineManagerEmail != null and request.lineManagerEmail != ''">
+                AND iaad.line_manager_email = #{request.lineManagerEmail}
+            </if>
+            <if test="request.bpo != null and request.bpo != ''">
+                <choose>
+                    <when test="request.bpo == 'None'">
+                        AND (iaad.bpo IS NULL or iaad.bpo = '')
+                    </when>
+                    <otherwise>
+                        AND iaad.bpo ~* '\y(${request.bpo})\y'
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="request.bpoEmail != null and request.bpoEmail != ''">
+                AND iaad.bpo_email = #{request.bpoEmail}
+            </if>
+            <choose>
+                <when test='request.dataRange.contains("*")'>
+                    <!-- IT role can see all data -->
+                </when>
+                <otherwise>
+                    AND iaad.cmdb_id IN
+                    <foreach collection="request.dataRange" item="item" open="(" separator="," close=")">
+                        #{item}
+                    </foreach>
+                </otherwise>
+            </choose>
+            <if test="request.lineManagerLevelCode != null and request.lineManagerLevelCode != ''">
+                AND mgr.management_level
+                <choose>
+                    <when test="request.lineManagerLevelCode == '1'.toString()">
+                        not in ('Executive Director', 'Vice President', 'Senior Vice President', 'Executive Vice President', 'Chief Executive Officer')
+                    </when>
+                    <when test="request.lineManagerLevelCode == '2'.toString()">
+                        in ('Executive Director')
+                    </when>
+                    <when test="request.lineManagerLevelCode == '3'.toString()">
+                        in ('Vice President')
+                    </when>
+                    <when test="request.lineManagerLevelCode == '4'.toString()">
+                        in ('Senior Vice President', 'Executive Vice President', 'Chief Executive Officer')
+                    </when>
+                </choose>
+            </if>
+
+        </where>
+    </sql>
+
+    <sql id="Base_Column">
+        iaad.cmdb_id as cmdbId,
+        iaad.application_name as appName,
+        iaad.user_it_code as itCodeOfUser,
+        staff.real_name as userRealName,
+        iaad.system_role_id as systemRoleId,
+        iaad.system_role as systemRole,
+        iaad.role_description as roleDescription,
+        iaad.line_manager as lineManager,
+        iaad.line_manager_email as lineManagerEmail,
+        iaad.bpo as bpo,
+        iaad.bpo_email as bpoEmail
+    </sql>
+
+    <select id="getSyncData" resultType="com.lenovo.bean.ApplicationAccessDataBean">
+        SELECT
+        CASE WHEN iaad.access_label = 'LEIT_empty' THEN null
+            ELSE iaad.access_label
+        END as accessLabel,
+        CASE WHEN iaad.system_role_type = 'LEIT_empty' THEN null
+            ELSE iaad.system_role_type
+        END as systemRoleType,
+        CASE WHEN mgr.management_level IN ('Executive Director') THEN '2'
+            WHEN mgr.management_level IN ('Vice President') THEN '3'
+            WHEN mgr.management_level IN ('Senior Vice President', 'Executive Vice President', 'Chief Executive Officer') THEN '4'
+            ELSE '1'
+        END as lineManagerLevelCode,
+
+        <include refid="Base_Column"/>
+        FROM its_application_access_data as iaad
+        LEFT JOIN ad_tb_upp_nature_2 staff ON iaad.user_it_code = staff.user_name
+        LEFT JOIN ad_tb_upp_nature_2 mgr ON iaad.line_manager = mgr.user_name
+
+        <include refid="Base_Where"/>
+        <if test="request.sortField != null and request.sortField != ''">
+            ORDER BY ${request.sortField} ${request.sortOrder}
+        </if>
+    </select>
+
+    <select id="getSyncDataForExport" resultType="com.lenovo.bean.ApplicationAccessDataBean">
+        SELECT
+        iaad.access_label AS accessLabel,
+        <choose>
+            <when test="request.language != null and request.language == 'CN'">
+                CASE WHEN iaad.system_role_type = 'LEIT_empty' THEN null
+                WHEN iaad.system_role_type = 'function' THEN '功能'
+                WHEN iaad.system_role_type = 'data' THEN '数据'
+                WHEN iaad.system_role_type = 'function/data' THEN '功能/数据'
+                ELSE iaad.system_role_type END AS systemRoleType,
+            </when>
+            <otherwise>
+                CASE WHEN iaad.system_role_type = 'LEIT_empty' THEN null
+                ELSE iaad.system_role_type END AS systemRoleType,
+            </otherwise>
+        </choose>
+        CASE WHEN mgr.management_level IN ('Executive Director') THEN 'ED'
+        WHEN mgr.management_level IN ('Vice President') THEN 'VP'
+        WHEN mgr.management_level IN ('Senior Vice President', 'Executive Vice President', 'Chief Executive Officer') THEN 'SVP and above'
+        ELSE 'Director and below'
+        END as lineManagerLevelCode,
+        <include refid="Base_Column"/>
+        FROM its_application_access_data as iaad
+        left join ad_tb_upp_nature_2 staff on iaad.user_it_code = staff.user_name
+        LEFT JOIN ad_tb_upp_nature_2 mgr ON iaad.line_manager = mgr.user_name
+        <include refid="Base_Where"/>
+        <if test="request.sortField != null and request.sortField != ''">
+            ORDER BY ${request.sortField} ${request.sortOrder}
+        </if>
+    </select>
+
+    <select id="getDistinctRoleAndBpo" resultType="com.lenovo.bean.ApplicationAccessDataBean">
+        SELECT
+        DISTINCT iaad.cmdb_id as cmdbId,
+        iaad.application_name as appName,
+        iaad.system_role_id as systemRoleId,
+        iaad.system_role as systemRole,
+        iaad.role_description as roleDescription,
+        iaad.access_label AS accessLabel,
+        <choose>
+            <when test="request.language != null and request.language == 'CN'">
+                CASE WHEN iaad.system_role_type = 'LEIT_empty' THEN null
+                WHEN iaad.system_role_type = 'function' THEN '功能'
+                WHEN iaad.system_role_type = 'data' THEN '数据'
+                WHEN iaad.system_role_type = 'function/data' THEN '功能/数据'
+                ELSE iaad.system_role_type END AS systemRoleType,
+
+            </when>
+            <otherwise>
+                CASE WHEN iaad.system_role_type = 'LEIT_empty' THEN null
+                ELSE iaad.system_role_type END AS systemRoleType,
+
+            </otherwise>
+        </choose>
+
+        iaad.bpo as bpo,
+        iaad.bpo_email as bpoEmail
+        FROM its_application_access_data as iaad
+        <where>
+            <if test="request.cmdbId != null and request.cmdbId != ''">
+                AND iaad.cmdb_id = #{request.cmdbId}
+            </if>
+            <choose>
+                <when test='request.dataRange.contains("*")'>
+                    <!-- IT role can see all data -->
+                </when>
+                <otherwise>
+                    AND iaad.cmdb_id IN
+                    <foreach collection="request.dataRange" item="item" open="(" separator="," close=")">
+                        #{item}
+                    </foreach>
+                </otherwise>
+            </choose>
+        </where>
+        order by systemRole
+    </select>
+
+</mapper>

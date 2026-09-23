@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.FormTemplateMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.FormTemplate">
+            <id property="id" column="id" jdbcType="INTEGER"/>
+            <result property="templateName" column="template_name" jdbcType="VARCHAR"/>
+            <result property="fromTemplate" column="from_template" jdbcType="VARCHAR"/>
+            <result property="workspaceId" column="workspace_id" jdbcType="INTEGER"/>
+            <result property="creator" column="creator" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,template_name,from_template,
+        workspace_id,creator
+    </sql>
+</mapper>

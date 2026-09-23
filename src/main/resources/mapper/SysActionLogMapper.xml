@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.SysActionLogMapper">
+
+    <insert id="addSysActionLog" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_action_log
+        (username,
+         operation,
+         method,
+         request_uri,
+         params,
+         time,
+         status,
+         ip,
+         user_agent,
+         create_date,
+         tenant_id)
+        VALUES (#{SysActionLog.username}, #{SysActionLog.operation},#{SysActionLog.method},
+                #{SysActionLog.requestUri}, #{SysActionLog.params}, #{SysActionLog.time}, #{SysActionLog.status}, #{SysActionLog.ip},
+                #{SysActionLog.userAgent}, #{SysActionLog.createDate}, #{SysActionLog.tenantId});
+    </insert>
+
+    <select id="getActionLogByMethod" resultType="com.lenovo.entity.SysActionLog">
+         SELECT * FROM sys_action_log
+         <where>
+             "method" in
+             <foreach item="item" collection="methods" separator="," open="(" close=")">
+                 #{item}
+             </foreach>
+         </where>
+    </select>
+</mapper>

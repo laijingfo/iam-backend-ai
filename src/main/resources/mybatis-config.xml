@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE configuration
+        PUBLIC "-//mybatis.org//DTD Config 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-config.dtd">
+
+<configuration>
+    <settings>
+        <setting name="lazyLoadingEnabled" value="true"/>
+        <setting name="aggressiveLazyLoading" value="false"/>
+        <setting name="defaultExecutorType" value="REUSE"/>
+        <setting name="defaultStatementTimeout" value="60"/>
+        <setting name="defaultFetchSize" value="1000"/>
+        <setting name="useGeneratedKeys" value="true"/>
+        <setting name="multipleResultSetsEnabled" value="true"/>
+        <setting name="autoMappingBehavior" value="FULL"/>
+        <setting name="mapUnderscoreToCamelCase" value="true"/>
+        <setting name="autoMappingUnknownColumnBehavior" value="WARNING"/>
+
+        <!-- 关键修改：使用 SLF4J，让 MyBatis 日志走 logback -->
+        <setting name="logImpl" value="org.apache.ibatis.logging.slf4j.Slf4jImpl"/>
+
+        <setting name="callSettersOnNulls" value="true"/>
+    </settings>
+</configuration>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.ApplicationAccessLinkMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.ApplicationAccessLink">
+        <id column="id" property="id"/>
+        <result column="cmdb_id" property="cmdbId"/>
+        <result column="app_name" property="appName"/>
+        <result column="access_link" property="accessLink"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <select id="queryBySearchKey" resultMap="BaseResultMap">
+        SELECT
+            aal.id,
+            aal.cmdb_id,
+            iad.application_name AS app_name,
+            aal.access_link,
+            aal.create_time,
+            aal.update_time
+        FROM its_application_access_link aal
+        JOIN its_application_data iad ON aal.cmdb_id = iad.cmdb_id
+        <where>
+            aal.access_link IS NOT NULL
+            AND aal.access_link != ''
+            <if test="searchKey != null and searchKey != ''">
+                AND (
+                    iad.cmdb_id LIKE '%' || #{searchKey} || '%'
+                    OR iad.application_name LIKE '%' || #{searchKey} || '%'
+                )
+            </if>
+        </where>
+        ORDER BY aal.cmdb_id ASC
+    </select>
+
+</mapper>

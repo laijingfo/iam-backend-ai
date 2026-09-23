@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.ItsApplicationAccessDataServiceMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.ItsApplicationAccessData">
+        <result property="id" column="id" jdbcType="VARCHAR"/>
+        <result property="cmdbId" column="cmdb_id" jdbcType="VARCHAR"/>
+        <result property="applicationName" column="application_name" jdbcType="VARCHAR"/>
+        <result property="application" column="application" jdbcType="VARCHAR"/>
+        <result property="userId" column="user_id" jdbcType="VARCHAR"/>
+        <result property="userItCode" column="user_it_code" jdbcType="VARCHAR"/>
+        <result property="email" column="email" jdbcType="VARCHAR"/>
+        <result property="userName" column="user_name" jdbcType="VARCHAR"/>
+        <result property="userIdValidTo" column="user_id_valid_to" jdbcType="VARCHAR"/>
+        <result property="systemRole" column="system_role" jdbcType="VARCHAR"/>
+        <result property="roleDescription" column="role_description" jdbcType="VARCHAR"/>
+        <result property="roleValidTo" column="role_valid_to" jdbcType="VARCHAR"/>
+        <result property="leitSystemId" column="leit_system_id" jdbcType="VARCHAR"/>
+        <result property="leitSystemName" column="leit_system_name" jdbcType="VARCHAR"/>
+        <result property="country" column="country" jdbcType="VARCHAR"/>
+        <result property="department" column="department" jdbcType="VARCHAR"/>
+        <result property="lineManager" column="line_manager" jdbcType="VARCHAR"/>
+        <result property="secondLineManager" column="second_line_manager" jdbcType="VARCHAR"/>
+        <result property="lineManagerEmail" column="line_manager_email" jdbcType="VARCHAR"/>
+        <result property="bpo" column="bpo" jdbcType="VARCHAR"/>
+        <result property="bpoEmail" column="bpo_email" jdbcType="VARCHAR"/>
+        <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
+        <result property="createBy" column="create_by" jdbcType="VARCHAR"/>
+        <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
+        <result property="updateBy" column="update_by" jdbcType="VARCHAR"/>
+        <result property="backupBpo" column="backup_bpo" jdbcType="VARCHAR"/>
+        <result property="backupBpoEmail" column="backup_bpo_email" jdbcType="VARCHAR"/>
+        <result property="appBpo" column="app_bpo" jdbcType="VARCHAR"/>
+        <result property="appBpoEmail" column="app_bpo_email" jdbcType="VARCHAR"/>
+        <result property="bpoBandEdFlag" column="bpo_band_ed_flag" jdbcType="VARCHAR"/>
+        <result property="backupBpoBandEdFlag" column="backup_bpo_band_ed_flag" jdbcType="VARCHAR"/>
+        <result property="appBpoBandEdFlag" column="app_bpo_band_ed_flag" jdbcType="VARCHAR"/>
+
+
+    </resultMap>
+
+
+    <select id="countByCmdbId" resultType="long">
+        SELECT COUNT(1) FROM its_application_access_data WHERE cmdb_id = #{cmdbId}
+    </select>
+
+    <insert id="batchInsert">
+        INSERT INTO its_application_access_data (
+            cmdb_id, application_name, application, access_label, user_id, user_it_code, email, user_name, user_real_name, user_id_valid_to,
+            system_role_id, system_role, system_role_type, role_description, role_valid_to, leit_system_id, leit_system_name, country, department,
+            line_manager, second_line_manager, line_manager_email,
+            bpo, bpo_email, backup_bpo, backup_bpo_email, app_bpo, app_bpo_email,
+            line_manager_band_ed_flag, bpo_band_ed_flag, backup_bpo_band_ed_flag, app_bpo_band_ed_flag,
+            apply_form_role_state
+        ) VALUES
+            <foreach item="item" collection="list" separator="," index="index">
+                (#{item.cmdbId}, #{item.applicationName}, #{item.application}, #{item.accessLabel}, #{item.userId}, #{item.userItCode}, #{item.email}, #{item.userName}, #{item.userRealName}, #{item.userIdValidTo},
+                #{item.systemRoleId}, #{item.systemRole}, #{item.systemRoleType}, #{item.roleDescription}, #{item.roleValidTo}, #{item.leitSystemId}, #{item.leitSystemName}, #{item.country}, #{item.department},
+                #{item.lineManager}, #{item.secondLineManager}, #{item.lineManagerEmail},
+                #{item.bpo}, #{item.bpoEmail}, #{item.backupBpo}, #{item.backupBpoEmail}, #{item.appBpo}, #{item.appBpoEmail},
+                #{item.lineManagerBandEdFlag}, #{item.bpoBandEdFlag}, #{item.backupBpoBandEdFlag}, #{item.appBpoBandEdFlag},
+                #{item.applyFormRoleState}
+                )
+            </foreach>
+
+    </insert>
+
+    <delete id="clearTable">
+        TRUNCATE TABLE its_application_access_data
+    </delete>
+
+    <select id="analyzeTable">
+        ANALYZE its_application_access_data
+    </select>
+</mapper>

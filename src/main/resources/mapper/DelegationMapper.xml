@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.DelegationMapper">
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.Delegation">
+        <result property="delegator" column="delegator" jdbcType="VARCHAR"/>
+        <result property="delegatee" column="delegatee" jdbcType="VARCHAR"/>
+        <result property="delegationStartDate" column="delegation_start_date" jdbcType="DATE"/>
+        <result property="delegationEndDate" column="delegation_end_date" jdbcType="DATE"/>
+        <result property="delegationStatus" column="delegation_status" jdbcType="VARCHAR"/>
+        <result property="creationDate" column="creation_date" jdbcType="DATE"/>
+        <result property="delegationScope" column="delegation_scope" jdbcType="VARCHAR"/>
+        <result property="reasonForDelegation" column="reason_for_delegation" jdbcType="VARCHAR"/>
+        <result property="id" column="id" jdbcType="INTEGER"/>
+        <result property="delete" column="delete" jdbcType="SMALLINT"/>
+        <result property="delegationCmdbId" column="delegation_cmdb_id" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <!--查询全部数据包含IT和bpoLm角色-->
+    <select id="query" resultMap="BaseResultMap">
+        SELECT id,delegator, delegatee, delegation_start_date, delegation_end_date,delegation_status, creation_date,reason_for_delegation,"delete",delegation_cmdb_id,
+            CASE
+                WHEN delegation_scope = 'Line_Manager' THEN '1'
+                WHEN delegation_scope = 'BPO' THEN '2'
+                WHEN delegation_scope = 'Lm+BPO' THEN '3'
+                ELSE 'unknown'
+            END AS delegation_scope
+        FROM delegation rm WHERE 1=1
+        AND rm.delete = 0
+        <choose>
+            <when test='DelegationBean != null and DelegationBean.roleFlag == "1"'>
+                <choose>
+                    <when test="DelegationBean.delegator == null and DelegationBean.delegatee == null">
+                    </when>
+                    <otherwise>
+                        <if test="DelegationBean.delegator == null">
+                            AND rm.delegatee = #{DelegationBean.delegatee}
+                        </if>
+                        <if test="DelegationBean.delegatee == null">
+                            AND rm.delegator = #{DelegationBean.delegator}
+                        </if>
+                        <if test="DelegationBean.delegator != null and DelegationBean.delegatee != null">
+                            AND rm.delegatee = #{DelegationBean.delegatee} AND rm.delegator = #{DelegationBean.delegator}
+                        </if>
+                    </otherwise>
+                </choose>
+            </when>
+
+            <!--非IT权限智能查询出属于自己itcode的数据-->
+            <when test='DelegationBean != null and DelegationBean.roleFlag == "2"'>
+                <choose>
+                    <when test="DelegationBean.delegator == null and DelegationBean.delegatee == null">
+                        AND (rm.delegator = #{DelegationBean.currentUserItCode} or rm.delegatee = #{DelegationBean.currentUserItCode})
+                    </when>
+                    <otherwise>
+                        <if test="DelegationBean.delegator == null and DelegationBean.delegatee != DelegationBean.currentUserItCode">
+                            AND rm.delegator = #{DelegationBean.currentUserItCode} AND rm.delegatee = #{DelegationBean.delegatee}
+                        </if>
+                        <if test="DelegationBean.delegatee == null and DelegationBean.delegator != DelegationBean.currentUserItCode">
+                            AND rm.delegator = #{DelegationBean.delegator} AND rm.delegatee = #{DelegationBean.currentUserItCode}
+                        </if>
+                        <if test="DelegationBean.delegator == null and DelegationBean.delegatee == DelegationBean.currentUserItCode">
+                            AND rm.delegatee = #{DelegationBean.delegatee}
+                        </if>
+                        <if test="DelegationBean.delegatee == null and DelegationBean.delegator == DelegationBean.currentUserItCode">
+                            AND rm.delegator = #{DelegationBean.delegator}
+                        </if>
+
+                        <if test="DelegationBean.delegator != null and DelegationBean.delegatee != null">
+                            <if test="DelegationBean.delegator == DelegationBean.currentUserItCode and DelegationBean.delegatee != DelegationBean.currentUserItCode">
+                                AND rm.delegator = #{DelegationBean.currentUserItCode} AND rm.delegatee = #{DelegationBean.delegatee}
+                            </if>
+                            <if test="DelegationBean.delegatee == DelegationBean.currentUserItCode and DelegationBean.delegator != DelegationBean.currentUserItCode">
+                                AND rm.delegator = #{DelegationBean.delegator} AND rm.delegatee = #{DelegationBean.currentUserItCode}
+                            </if>
+                            <if test="DelegationBean.delegator == DelegationBean.currentUserItCode and DelegationBean.delegatee == DelegationBean.currentUserItCode">
+                                AND 1=2
+                            </if>
+                            <if test="DelegationBean.delegator != DelegationBean.currentUserItCode and DelegationBean.delegatee != DelegationBean.currentUserItCode">
+                                AND 1=2
+                            </if>
+                        </if>
+                    </otherwise>
+                </choose>
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+        order by rm.creation_date desc
+    </select>
+
+    <select id="getDelegationByDelegatee" resultMap="BaseResultMap">
+        SELECT rm.* FROM delegation rm
+        WHERE rm.delegatee = #{DelegationBean.delegatee} AND rm.delete = 0 ORDER BY rm.creation_date DESC
+    </select>
+
+    <!--用户登陆获取权限-->
+    <select id="getDelegationByDelegateeAndDelegationDate" resultMap="BaseResultMap">
+        SELECT rm.* FROM delegation rm
+        WHERE rm.delegatee = #{DelegationBean.delegatee}
+        AND CURRENT_DATE &gt;= delegation_start_date
+        AND CURRENT_DATE &lt;= delegation_end_date
+        AND rm.delete = 0
+        ORDER BY rm.creation_date desc
+    </select>
+
+    <!--发送通知页面：发送邮件：给LineManager或者BPO发邮件时候，查询时候授权给别人，授权给别人也要发邮件-->
+    <select id="getDelegateeBySendEmail" resultMap="BaseResultMap">
+        SELECT  rm.*  FROM delegation rm
+        WHERE 1=1
+        AND rm.delegator IN
+        <foreach collection="DelegationBean.delegatorList" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+        AND CURRENT_DATE &gt;= delegation_start_date
+        AND CURRENT_DATE &lt;= delegation_end_date
+        AND rm.delete = 0
+        ORDER BY rm.creation_date DESC
+    </select>
+
+    <!--查询是否重复授权-->
+    <select id="getDelegationByReapeat" resultMap="BaseResultMap">
+        SELECT rm.* FROM delegation rm
+        WHERE rm.delegator = #{DelegationBean.delegator}
+        AND rm.delegatee = #{DelegationBean.delegatee}
+        <choose>
+            <when test='DelegationBean != null and DelegationBean.delegationScope == "1"'>
+                AND rm.delegation_scope = 'Line_Manager'
+            </when>
+            <when test='DelegationBean != null and DelegationBean.delegationScope == "2"'>
+                AND rm.delegation_scope = 'BPO'
+            </when>
+            <when test='DelegationBean != null and DelegationBean.delegationScope == "3"'>
+                AND rm.delegation_scope = 'Lm+BPO'
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+        AND rm.delegation_start_date = #{DelegationBean.delegationStartDate}
+        AND rm.delegation_end_date = #{DelegationBean.delegationEndDate}
+        AND rm.delete = 0
+    </select>
+
+    <!--保存-->
+    <insert id="insertDelegation" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO delegation
+        (
+            delegator,
+            delegatee,
+            delegation_start_date,
+            delegation_end_date,
+            delegation_status,
+            creation_date,
+            delegation_scope,
+            reason_for_delegation,
+            delete,
+            delegation_cmdb_id
+        )
+        VALUES
+        (
+             #{DelegationBean.delegator},
+             #{DelegationBean.delegatee},
+             #{DelegationBean.delegationStartDate},
+             #{DelegationBean.delegationEndDate},
+             #{DelegationBean.delegationStatus},
+             CURRENT_DATE,
+             <choose>
+                <when test='DelegationBean != null and DelegationBean.delegationScope == "1"'>
+                    'Line_Manager'
+                </when>
+                <when test='DelegationBean != null and DelegationBean.delegationScope == "2"'>
+                    'BPO'
+                </when>
+                <when test='DelegationBean != null and DelegationBean.delegationScope == "3"'>
+                    'Lm+BPO'
+                </when>
+                <otherwise>
+                    'noscope'
+                </otherwise>
+             </choose>,
+             #{DelegationBean.reasonForDelegation},
+             0,
+             #{DelegationBean.delegationCmdbId}
+        )
+    </insert>
+
+    <!--授权BPO，选择出需要授权的BPO数据-->
+    <select id="getBpsByUserAccessReview" resultType="com.lenovo.bean.DelegationBean">
+        SELECT
+            rm.cmdb_id AS cmdbId,
+            STRING_AGG(DISTINCT rm.sequence_number, ',') AS sequenceNumber,
+            STRING_AGG(DISTINCT rm.it_code_of_user, ',') AS itCodeOfUser,
+            STRING_AGG(DISTINCT iad.application_name, ',') AS appName
+        FROM user_access_review rm
+        LEFT JOIN its_application_data iad ON iad.cmdb_id = rm.cmdb_id
+        WHERE 1=1
+        <choose>
+            <when test='DelegationBean != null and DelegationBean.delegationFlag == "1"'>
+                <if test="DelegationBean.line_manager != null and DelegationBean.line_manager != ''">
+                    AND rm.line_manager ~* '\y(${DelegationBean.line_manager})\y'
+                </if>
+            </when>
+            <when test='DelegationBean != null and DelegationBean.delegationFlag == "2"'>
+                <if test="DelegationBean.bpo != null and DelegationBean.bpo != ''">
+                    AND rm.bpo ~* '\y(${DelegationBean.bpo})\y'
+                </if>
+            </when>
+            <when test='DelegationBean != null and DelegationBean.delegationFlag == "3"'>
+                <if test="DelegationBean.bpo != null and DelegationBean.bpo != '' and DelegationBean.line_manager != null and DelegationBean.line_manager != ''">
+                    AND (rm.bpo ~* '\y(${DelegationBean.bpo})\y' OR rm.line_manager ~* '\y(${DelegationBean.line_manager})\y')
+                </if>
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+        GROUP BY rm.cmdb_id;
+    </select>
+
+    <!--查询授权表该登陆账户是否被授权-->
+    <select id="getDelegationByDataAndBps" resultMap="BaseResultMap">
+        SELECT
+            rm.delegator AS delegator,
+            STRING_AGG(DISTINCT rm.delegation_cmdb_id, ',') AS delegation_cmdb_id
+        from delegation rm
+        WHERE 1=1
+          AND rm.delegatee = #{DelegationBean.delegatee}
+          AND CURRENT_DATE &gt;= rm.delegation_start_date
+          AND CURRENT_DATE &lt;= rm.delegation_end_date
+          AND rm.delete = 0
+          AND rm.delegation_scope = #{DelegationBean.delegationScope}
+        group by rm.delegator;
+    </select>
+
+    <!--查询授权人所有的cmdbID-->
+    <select id="getCmdbIdByBps" resultType="java.lang.String">
+        select rm.cmdb_id from user_access_review rm
+        where 1=1
+          AND rm.bpo ~* '\y(${DelegationBean.delegator})\y'
+          AND rm.delete_flag = false
+        group by rm.cmdb_id;
+    </select>
+
+    <select id="getDelegateeByBpo" resultType="java.util.Map">
+        SELECT
+            d.delegatee as bpo,
+            string_agg(DISTINCT a.email, ',') AS email
+        FROM ad_tb_upp_nature_2 a
+        INNER JOIN delegation d ON lower(a.user_name) = lower(d.delegatee)
+        WHERE   CURRENT_DATE &gt;= d.delegation_start_date
+            AND CURRENT_DATE &lt;= d.delegation_end_date
+            AND d.delete = 0
+            AND d.delegator IN
+                <foreach collection="allowSendEmail" item="item" open="(" separator="," close=")">
+                    #{item.bpo}
+                </foreach>
+        GROUP BY d.delegatee;
+    </select>
+</mapper>

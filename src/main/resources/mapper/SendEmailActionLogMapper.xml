@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.SendEmailActionLogMapper">
+    <insert id="addSendEmailLog" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO send_email_action_log
+        (it_code,
+         operation,
+         send_flag,
+         message,
+         stack_trace,
+         batch_no,
+         create_date)
+        VALUES
+        (#{SendEmailActionLog.itCode},
+         #{SendEmailActionLog.operation},
+         #{SendEmailActionLog.sendFlag},
+         #{SendEmailActionLog.message},
+         #{SendEmailActionLog.stackTrace},
+         #{SendEmailActionLog.batchNo},
+         #{SendEmailActionLog.createDate});
+    </insert>
+</mapper>

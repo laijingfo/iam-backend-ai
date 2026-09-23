@@ -1,0 +1,362 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UserMapper">
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.lenovo.bean.UserBean">
+        <result column="id" property="id"/>
+        <result column="user_name" property="userName"/>
+        <result column="itcode" property="itcode"/>
+        <result column="type" property="type"/>
+        <result column="phone_number" property="phoneNumber"/>
+        <result column="mail" property="mail"/>
+        <result column="description" property="description"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+        <result column="status" property="status"/>
+        <result column="delete" property="delete"/>
+        <result column="password" property="password"/>
+        <result column="date_range" property="dateRange"/>
+        <collection property="roles" select="com.lenovo.mapper.RoleMapper.findRoleByUserId"
+                    column="{id=id,type=type}" ofType="com.lenovo.entity.Role"/>
+    </resultMap>
+    <resultMap id="UserRoleResultMap" type="com.lenovo.entity.User">
+        <result column="id" property="id"/>
+        <result column="user_name" property="userName"/>
+        <result column="type" property="type"/>
+        <result column="mail" property="mail"/>
+        <collection property="roles" select="com.lenovo.mapper.RoleMapper.findRoleByUserId"
+                    column="{id=id,type=type}" ofType="com.lenovo.entity.Role"/>
+    </resultMap>
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        <trim suffixOverrides=",">
+            id as id,
+            user_name as userName,
+            itcode as itcode,
+            type as type,
+            phone_number as phoneNumber,
+            mail as mail,
+            description as description,
+            create_time as createTime,
+            update_time as updateTime,
+            status as status,
+            password as password,
+            delete
+        </trim>
+    </sql>
+    <insert id="create" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_user
+        (user_name, itcode, "type", phone_number, mail, description, "status", "password", "delete", date_range)
+        VALUES (#{item.userName}, #{item.itcode}, #{item.type}, #{item.phoneNumber}, #{item.mail}, #{item.description},
+                true, #{item.password}, false, #{item.dateRange});
+
+    </insert>
+    <insert id="addUser">
+        insert into ad_tb_upp_nature_2
+            (user_name, email)
+        values (#{userInfo.itcode}, #{userInfo.email})
+    </insert>
+
+
+    <select id="selectByPage" resultMap="BaseResultMap">
+        select
+        id ,
+        user_name ,
+        itcode,
+        type ,
+        phone_number ,
+        mail ,
+        description ,
+        to_char(create_time AT TIME ZONE 'UTC-8','YYYY-MM-DD hh24:mi:ss') as create_time,
+        to_char(create_time AT TIME ZONE 'UTC-8','YYYY-MM-DD hh24:mi:ss') as update_time ,
+        status ,
+        password ,
+        delete,
+        date_range
+        from sys_user
+        <where>
+            delete = false
+            <if test="item.userName != null and item.userName != ''">
+                and user_name like '%'||#{item.userName}||'%'
+            </if>
+            <if test="item.itcode != null and item.itcode != ''">
+                and itcode like '%'||#{item.itcode}||'%'
+            </if>
+            <if test="item.type != null and item.type != ''">
+                and type = #{item.type}
+            </if>
+            <if test="item.phoneNumber != null and item.phoneNumber != ''">
+                and phone_number = #{item.phoneNumber}
+            </if>
+        </where>
+
+        order by create_time desc
+    </select>
+
+    <select id="findRoleMenuPermissionByUserId" resultType="com.lenovo.bean.RoleMenuBean">
+        with tmp as (with recursive tmp as (select mr.parent_id
+                                            from menu_router mr,
+                                                 sys_role_menu srm,
+                                                 sys_user_roles sur
+                                            where mr.id = srm.menu_id
+                                              and srm.checked = true
+                                              and sur.role_id = srm.role_id
+                                              and sur.user_id = #{id}
+                                            union all
+                                            select mr.parent_id
+                                            from menu_router mr,
+                                                 tmp
+                                            where mr.id = tmp.parent_id
+                                              and mr.parent_id is not null)
+                     select parent_id
+                     from tmp)
+        select sr.description       as roleDescription,
+               sr."name"            as roleName,
+               array_to_string(ARRAY(SELECT unnest(array_agg(concat_ws('/', mr.menu_key, case
+                                                                                             when srm.read_write
+                                                                                                 then 'Reading And Writing'
+                                                                                             else 'Read Only' end)))),
+                               ';') as features
+        from menu_router mr
+           , sys_role_menu srm
+           , sys_user_roles sur
+           , sys_role sr
+        where (srm.menu_id in (select parent_id from tmp) or srm.checked = true)
+          and mr.id = srm.menu_id
+          and sr.id = sur.role_id
+          and sur.role_id = srm.role_id
+          and sur.user_id = #{id}
+          and sr.status = true
+        group by sr."name", sr.description
+    </select>
+
+    <select id="deleteById">
+        UPDATE sys_user
+        SET "delete"= true
+        where id = #{id}
+          and internal = false
+    </select>
+    <select id="countByPage" resultType="java.lang.Integer">
+        select
+        count(0)
+        from sys_user
+        <where>
+            delete = false
+            <if test="item.userName != null and item.userName != ''">
+                and user_name like '%'||#{item.userName}||'%'
+            </if>
+            <if test="item.itcode != null and item.itcode != ''">
+                and itcode like '%'||#{item.itcode}||'%'
+            </if>
+            <if test="item.type != null and item.type != ''">
+                and type = #{item.type}
+            </if>
+            <if test="item.phoneNumber != null and item.phoneNumber != ''">
+                and phone_number = #{item.phoneNumber}
+            </if>
+        </where>
+
+    </select>
+    <select id="getOne" resultType="com.lenovo.entity.User">
+        select
+        <include refid="Base_Column_List"/>
+        from sys_user where (itcode = #{id} OR id = #{id})
+    </select>
+    <select id="findUserMenuByUserId" resultType="com.lenovo.bean.UserMenuBean">
+        select distinct r.read_write as readAndWrite, menu.id as menuId, menu.*
+        from (select * from menu_router) as menu
+                 left join
+             (select srm.menu_id, srm.read_write
+              from sys_role_menu srm
+                       left join sys_user_roles sur on srm.role_id = sur.role_id
+              where sur.user_id = #{id}) as r
+             on menu.id = r.menu_id
+        order by id
+
+    </select>
+    <select id="findUserListByRole" resultType="com.lenovo.bean.UserBean">
+        select distinct su.user_name as id,
+                        su.user_name as userName,
+                        su.user_name as itcode,
+                       'ADFS'       as type,
+                       ''           as phoneNumber,
+                       su.email     as mail,
+                       '-'          as description
+        from ad_tb_upp_nature_2 su
+          , sys_user_roles sur
+        where su.user_name = sur.user_id
+          and sur.role_id = #{roleId}
+          and sur."type" = 'ADFS'
+    </select>
+    <select id="getADFSUserItem" resultType="com.lenovo.entity.User">
+        SELECT distinct atun.user_name as id,atun.user_name,atun .email as mail ,'-' as description,'ADFS' as
+        type FROM
+        ad_tb_upp_nature_2 atun where 1=1
+        <if test="name != null and name != '' ">
+            and atun.user_name like '%'||#{name}||'%'
+        </if>
+        limit 100
+    </select>
+    <select id="getLoginData" resultType="com.lenovo.security.service.dto.UserLoginDto">
+        select *
+        from sys_user
+        where user_name = #{userName}
+          and delete = false
+        limit 1
+    </select>
+    <select id="findByName" resultType="com.lenovo.entity.User">
+        select *
+        from sys_user
+        where user_name = #{userName}
+          and delete = false
+        limit 1
+    </select>
+    <select id="getOneByUserName" resultType="com.lenovo.entity.User">
+        select *
+        from sys_user
+        where user_name = #{userName}
+    </select>
+    <select id="findByUserNameAndDelete" resultType="com.lenovo.entity.User">
+        select * from sys_user where user_name = #{userName} and delete = #{delete}
+        <if test="userId != '' and userId != null">
+            and id != #{userId}
+        </if>
+        limit 1
+    </select>
+    <select id="findRoleMenuPermissionByItcode" resultType="com.lenovo.bean.RoleMenuBean">
+        select distinct sr."name" as roleName
+        from sys_role sr
+                 left join sys_user_roles sur on sur.role_id = sr.id
+                 left join ad_tb_upp_nature_2 atun on atun.user_name::varchar = sur.user_id
+        where lower(atun.user_name) = lower(#{itcode}::text)
+
+    </select>
+    <select id="findAccountByEmail" resultType="com.lenovo.entity.User">
+        select id, user_name, mail
+        from sys_user
+        where mail = #{email}
+          and status = true
+          and delete = false
+    </select>
+
+
+    <update id="modifyById">
+        UPDATE sys_user SET
+        <trim prefixOverrides="," suffixOverrides=",">
+            <if test="item.userName != null and item.userName != ''">
+                user_name = #{item.userName},
+            </if>
+            <if test="item.itcode != null and item.itcode != ''">
+                itcode = #{item.itcode},
+            </if>
+            <if test="item.type != null and item.type != ''">
+                type = #{item.type},
+            </if>
+            <if test="item.phoneNumber != null and item.phoneNumber != ''">
+                phone_number= #{item.phoneNumber},
+            </if>
+            <if test="item.mail != null and item.mail != ''">
+                mail = #{item.mail},
+            </if>
+            <if test="item.description != null and item.description != ''">
+                description = #{item.description},
+            </if>
+            update_time= now(),
+            <if test="item.status != null and item.status != ''">
+                status = #{item.status},
+            </if>
+            <if test="item.password != null and item.password != ''">
+                password = #{item.password},
+            </if>
+            <if test="item.delete != null and item.delete != ''">
+                delete = #{item.delete},
+            </if>
+            <if test="item.dateRange != null and item.dateRange != ''">
+                date_range = #{item.dateRange},
+            </if>
+        </trim>
+        <where>
+            id = #{item.id} and internal = false
+        </where>
+    </update>
+    <update id="resetPassword">
+        UPDATE sys_user
+        SET password    = #{password},
+            update_time = now()
+        where id = #{id}
+    </update>
+    <update id="resetStatus">
+        UPDATE sys_user
+        SET status      = case when status then false else true end,
+            update_time = now()
+        where id = #{id}
+          and internal = false
+    </update>
+    <update id="updatePass">
+        UPDATE sys_user
+        SET password    = #{newPass},
+            update_time = now()
+        where user_name = #{userName}
+          and delete = false
+    </update>
+
+    <select id="getAdfsUserDomainByItcode" resultType="com.lenovo.bean.UserDomainBean">
+        select id,
+               email
+        from ad_tb_upp_nature_2
+        where lower(user_name) = lower(#{itcode}::text)
+    </select>
+
+    <select id="getOrganizeListByItcode" resultType="java.lang.String">
+        select distinct so.cost
+        from sys_organize so
+                 left join sys_role sr on so.society_id = sr.id
+                 left join sys_user_roles sur on sr.id = sur.role_id
+                 left join ad_tb_upp_nature_2 atun on sur.user_id = atun.user_name
+        where lower(atun.user_name) = lower(#{itcode}::text)
+    </select>
+    <select id="checkInAdOverview" resultType="java.lang.Integer">
+        select count(1)
+        from ad_overview
+        where itcode = #{itcode}
+    </select>
+    <select id="queryAll" resultType="com.lenovo.entity.User">
+        SELECT distinct atun.user_name as id,atun.user_name,atun .email as mail ,
+        '-' as description,
+        'ADFS' as type,
+        CASE WHEN atun.user_name = 'None' THEN 0 ELSE 1 END AS sort_order
+        FROM
+        ad_tb_upp_nature_2 atun where 1=1
+        <if test="name != null and name != '' ">
+            and atun.user_name like '%'||#{name}||'%'
+        </if>
+        ORDER BY sort_order, user_name
+        offset (#{page}-1)*#{size}
+        limit #{size}
+    </select>
+    <select id="queryByRole" resultMap="BaseResultMap">
+        SELECT distinct atun.user_name as id,atun.user_name,atun .email as mail ,'-' as description,'ADFS' as
+        type FROM
+        ad_tb_upp_nature_2 atun where 1=1
+        <if test="name != null and name != '' ">
+            and atun.user_name like '%'||#{name}||'%'
+        </if>
+        and atun.user_name in (select user_id from sys_user_roles sur left join sys_role sr on sur.role_id = sr.id where
+        1= 1
+        <if test="roleName != null and roleName != ''">
+            and sr.name = #{roleName}
+        </if>
+        <if test="workspaceId != null">and sr.workspace_id = #{workspaceId}</if>
+        )
+    </select>
+    <select id="getAdfsUserByItcode" resultMap="UserRoleResultMap">
+        SELECT distinct atun.user_name as id,
+                        atun.user_name,
+                        atun.email     as mail,
+                        '-'            as description,
+                        'ADFS'         as
+                                          type
+        FROM ad_tb_upp_nature_2 atun
+        where atun.user_name = #{itcode}
+    </select>
+</mapper>

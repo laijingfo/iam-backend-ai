@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.LenovoUserMapper">
+
+    <select id="getDept" resultType="java.util.Map">
+        SELECT
+            sub.label AS label,
+            sub.label AS value
+        FROM
+        (
+            SELECT DISTINCT t.lenovo_dept AS label FROM ad_tb_upp_nature_2 t
+            WHERE t.lenovo_dept IS NOT NULL order by lenovo_dept desc
+        ) AS sub
+    </select>
+
+    <select id="getUserAndManagerInfo" resultType="com.lenovo.entity.LenovoUser">
+        SELECT
+            u.user_name,
+            u.email,
+            u.real_name,
+            u.country,
+            u.coc_flag AS cocFlag,
+            l.user_name AS manager1st,
+            l.email AS lineManagerEmail,
+            l.lenovo_dept,
+            l.management_level AS lineManagerLevelCode,
+            l.band_flag AS lineManagerBandFlag
+        FROM
+            ad_tb_upp_nature_2 u
+            left join ad_tb_upp_nature_2 l on u.manager1st = l.user_name
+        WHERE
+            u.user_name in (
+                <foreach item="item" collection="itCodes" separator=",">
+                    #{item}
+                </foreach>
+            )
+    </select>
+
+    <insert id="backupTable">
+        truncate table ad_tb_upp_nature_bk;
+        insert into ad_tb_upp_nature_bk select * from ad_tb_upp_nature_2;
+        truncate table ad_tb_upp_nature_2;
+        insert into ad_tb_upp_nature_2 (id, user_name, real_name, employee_type, management_level, manager1st)
+            values (-1, 'None', CURRENT_TIMESTAMP, 'UAR_DEFAULT', 'NULL', 'NULL');
+    </insert>
+
+    <select id="getAboveUser" resultType="java.lang.String">
+        SELECT ab.user_name FROM ad_tb_upp_nature_2 ab
+        where band_flag = '1'
+    </select>
+
+    <update id="analyzeData">
+        analyze ad_tb_upp_nature_2;
+    </update>
+
+    <select id="getUserInfoByItCode" resultType="com.lenovo.entity.LenovoUser">
+        SELECT * FROM ad_tb_upp_nature_2
+        WHERE LOWER(user_name) = LOWER(#{itCode})
+    </select>
+</mapper>

@@ -1,0 +1,683 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.DashboardMapper">
+
+    <sql id="Uar_Full_Conditions">
+        <where>
+            uar.delete_flag = false
+            <if test="useAccessReviewBean.itCodeOfUser != null and useAccessReviewBean.itCodeOfUser != ''">
+                and uar.it_code_of_user = #{useAccessReviewBean.itCodeOfUser}
+            </if>
+            <if test="useAccessReviewBean.appName != null and useAccessReviewBean.appName != ''">
+                and iad.application_name = #{useAccessReviewBean.appName}
+            </if>
+            <if test="useAccessReviewBean.cmdbId != null and useAccessReviewBean.cmdbId != ''">
+                and uar.cmdb_id = #{useAccessReviewBean.cmdbId}
+            </if>
+            <if test="useAccessReviewBean.lineManager != null and useAccessReviewBean.lineManager != ''">
+                and uar.line_manager = #{useAccessReviewBean.lineManager}
+            </if>
+            <if test="useAccessReviewBean.bpo != null and useAccessReviewBean.bpo != ''">
+                <choose>
+                    <when test="useAccessReviewBean.bpo == 'None'">
+                        AND (uar.bpo IS NULL or uar.bpo = '')
+                    </when>
+                    <otherwise>
+                        AND uar.bpo ~* '\y(${useAccessReviewBean.bpo})\y'
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="useAccessReviewBean.lineManagerReviewStatus != null and useAccessReviewBean.lineManagerReviewStatus != ''">
+                and uar.line_manager_review_status = #{useAccessReviewBean.lineManagerReviewStatus}
+            </if>
+            <if test="useAccessReviewBean.lineManagersReviewDecision != null and useAccessReviewBean.lineManagersReviewDecision != ''">
+                AND uar.line_managers_review_decision = #{useAccessReviewBean.lineManagersReviewDecision}
+            </if>
+
+            <if test="useAccessReviewBean.bpoReviewStatus != null and useAccessReviewBean.bpoReviewStatus != ''">
+                AND uar.bpo_review_status = #{useAccessReviewBean.bpoReviewStatus}
+            </if>
+            <if test="useAccessReviewBean.bpoReviewDecision != null and useAccessReviewBean.bpoReviewDecision != ''">
+                AND uar.bpo_review_decision = #{useAccessReviewBean.bpoReviewDecision}
+            </if>
+
+            <if test="useAccessReviewBean.finalReviewDecision != null and useAccessReviewBean.finalReviewDecision != ''">
+                AND uar.final_review_decision = #{useAccessReviewBean.finalReviewDecision}
+            </if>
+
+            <choose>
+                <when test='useAccessReviewBean.dataRange.contains("*")'>
+                    <!-- 通配符，代表查询全部数据 -->
+                </when>
+                <otherwise>
+                    AND uar.cmdb_id in (
+                    <foreach item="item" collection="useAccessReviewBean.dataRange" separator=",">
+                        #{item}
+                    </foreach>
+                    )
+                </otherwise>
+            </choose>
+            <if test="useAccessReviewBean.uarProcessor != null and useAccessReviewBean.uarProcessor != ''">
+                AND iad.uar_processor ~* '\y(${useAccessReviewBean.uarProcessor})\y'
+            </if>
+            <if test="useAccessReviewBean.appOperationOwner != null and useAccessReviewBean.appOperationOwner != ''">
+                AND iad.operation_owner = #{useAccessReviewBean.appOperationOwner}
+            </if>
+            <if test="useAccessReviewBean.appOperationFocal != null and useAccessReviewBean.appOperationFocal != ''">
+                <choose>
+                    <when test="useAccessReviewBean.appOperationFocal == 'None'">
+                        AND iad.operation_focal IS NULL
+                    </when>
+                    <otherwise>
+                        AND iad.operation_focal = #{useAccessReviewBean.appOperationFocal}
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="useAccessReviewBean.operationOwnerDomain != null and useAccessReviewBean.operationOwnerDomain != ''">
+                AND iad.operation_owner_domain = #{useAccessReviewBean.operationOwnerDomain}
+            </if>
+            <if test="useAccessReviewBean.operationOwnerTower != null and useAccessReviewBean.operationOwnerTower != ''">
+                AND iad.operation_owner_tower = #{useAccessReviewBean.operationOwnerTower}
+            </if>
+            <if test="useAccessReviewBean.lineManagerLevelCode != null and useAccessReviewBean.lineManagerLevelCode != ''">
+                AND uar.line_manager_level_code = #{useAccessReviewBean.lineManagerLevelCode}
+            </if>
+            <if test="useAccessReviewBean.isCurrentCycle == '0'.toString()">
+                AND uar.maintenance_id = #{useAccessReviewBean.currentDataCycle}
+            </if>
+        </where>
+    </sql>
+    <select id="queryUarFullData" resultType="com.lenovo.bean.DashboardUARBean">
+        SELECT
+            uar.id AS id,
+            uar.uar_id AS uarId,
+            uar.sequence_number AS sequenceNumber,
+            uar.cmdb_id AS cmdbId,
+            iad.application_name AS appName,
+            uar.user_name AS userName,
+            uar.system_role AS systemRole,
+            uar.role_description AS roleDescription,
+            uar.country AS country,
+            uar.it_code_of_user AS itCodeOfUser,
+            uar.user_coc_type AS userCocType,
+            uar.user_id AS userId,
+            uar.user_real_name AS userRealName,
+            uar.department AS department,
+            uar.email AS email,
+            CASE WHEN uar.access_label = 'LEIT_empty' THEN null
+            ELSE uar.access_label END AS accessLabel,
+            uar.line_manager AS lineManager,
+            uar.dept AS lineManagerDept,
+            uar.line_manager_email AS lineManagerEmail,
+            uar.line_manager_level_code AS lineManagerLevelCode,
+            uar.line_manager_review_status AS lineManagerReviewStatus,
+            uar.line_managers_review_decision AS lineManagersReviewDecision,
+            uar.line_manager_review_itcode AS lineManagerReviewItcode,
+            uar.line_manager_review_time AS lineManagerReviewTime,
+            uar.bpo AS bpo,
+            uar.bpo_email AS bpoEmail,
+            uar.bpo_coc_type AS bpoCocType,
+            uar.bpo_review_status AS bpoReviewStatus,
+            uar.bpo_review_itcode AS bpoReviewItcode,
+            uar.bpo_review_time AS bpoReviewTime,
+            uar.bpo_review_decision AS bpoReviewDecision,
+
+            uar.final_review_decision AS finalReviewDecision,
+            uar.final_review_time AS finalReviewTime,
+
+            iad.uar_processor as uarProcessor,
+            iad.operation_owner as appOperationOwner,
+            iad.operation_focal as appOperationFocal,
+            iad.operation_owner_domain as operationOwnerDomain,
+            iad.operation_owner_tower as operationOwnerTower
+        FROM
+        <if test="useAccessReviewBean.isCurrentCycle == '0'.toString()">
+            user_access_review_history uar
+        </if>
+        <if test="useAccessReviewBean.isCurrentCycle == '1'.toString()">
+            user_access_review uar
+        </if>
+        left join its_application_data iad on uar.cmdb_id = iad.cmdb_id
+        <include refid="Uar_Full_Conditions"></include>
+        order by
+        <choose>
+            <when test='useAccessReviewBean.sortField != null and useAccessReviewBean.sortField != ""'>
+                ${useAccessReviewBean.sortField}
+            </when>
+            <otherwise>
+                uar.sequence_number
+            </otherwise>
+        </choose>
+        <choose>
+            <when test='useAccessReviewBean.sortOrder != null and useAccessReviewBean.sortOrder != ""'>
+                ${useAccessReviewBean.sortOrder}
+            </when>
+            <otherwise>
+                ASC
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="exportUarFullData" resultType="com.lenovo.bean.DashboardUARBean">
+        SELECT
+        uar.sequence_number,
+        uar.cmdb_id,
+        iad.application_name as app_name,
+        uar.user_name,
+        uar.system_role,
+        uar.role_description,
+        uar.country,
+        uar.it_code_of_user,
+        uar.user_coc_type,
+        CASE WHEN atun.management_level IN ('ED', 'Executive Director') THEN 'ED'
+            WHEN atun.management_level IN ('VP', 'Vice President') THEN 'VP'
+            WHEN atun.management_level IN ('SVP', 'Senior Vice President', 'EVP', 'Executive Vice President', 'CEO', 'Chief Executive Officer') THEN 'SVP and above'
+            WHEN atun.management_level IS NULL THEN 'Invalid'
+            ELSE 'Director and below'
+        END AS userBand,
+        CASE WHEN
+            atun.id is null then 'Invalid'
+            else 'Valid'
+        end as adValid,
+        uar.user_id,
+        uar.department,
+        uar.email,
+        uar.line_manager,
+        uar.dept AS lineManagerDept,
+        uar.line_manager_email,
+        uar.line_manager_review_itcode,
+        uar.line_manager_review_time,
+        uar.bpo,
+        uar.bpo_email,
+        uar.bpo_coc_type,
+        uar.bpo_review_itcode,
+        uar.bpo_review_time,
+        uar.access_label AS accessLabel,
+        <!-- 根据语言参数动态转换 审核状态 -->
+        <choose>
+            <when test="language != null and language == 'CN'">
+                CASE uar.bpo_review_status
+                WHEN '1' THEN '未审核'
+                WHEN '2' THEN '已审核'
+                ELSE COALESCE(uar.bpo_review_status, '未知')
+                END AS bpo_review_status,
+
+                CASE uar.line_manager_review_status
+                WHEN '1' THEN '未审核'
+                WHEN '2' THEN '已审核'
+                ELSE COALESCE(uar.line_manager_review_status, '未知')
+                END AS line_manager_review_status,
+
+
+                CASE uar.line_managers_review_decision
+                WHEN 'keep' THEN '保留'
+                WHEN 'remove' THEN '移除'
+                ELSE uar.line_managers_review_decision
+                END AS line_managers_review_decision,
+
+                CASE uar.bpo_review_decision
+                WHEN 'keep' THEN '保留'
+                WHEN 'remove' THEN '移除'
+                ELSE uar.bpo_review_decision
+                END AS bpo_review_decision,
+
+
+                CASE uar.final_review_decision
+                    WHEN 'keep' THEN '保留'
+                    WHEN 'remove' THEN '移除'
+                    ELSE final_review_decision
+                END AS final_review_decision,
+                uar.final_review_time,
+
+            </when>
+            <otherwise>
+                CASE uar.bpo_review_status
+                WHEN '1' THEN 'Pending Review'
+                WHEN '2' THEN 'Reviewed'
+                ELSE COALESCE(uar.bpo_review_status, 'Unknown')
+                END AS bpo_review_status,
+
+                CASE uar.line_manager_review_status
+                WHEN '1' THEN 'Pending Review'
+                WHEN '2' THEN 'Reviewed'
+                ELSE COALESCE(uar.line_manager_review_status, 'Unknown')
+                END AS line_manager_review_status,
+
+                uar.line_managers_review_decision,
+                uar.bpo_review_decision,
+
+                uar.final_review_decision,
+                uar.final_review_time,
+
+            </otherwise>
+        </choose>
+        iad.uar_processor,
+        case line_manager_level_code
+            when '1' then 'Director and below'
+            when '2' then 'ED'
+            when '3' then 'VP'
+            when '4' then 'SVP and above'
+        END as lineManagerLevelCode,
+        iad.operation_owner as appOperationOwner,
+        iad.operation_focal as appOperationFocal,
+        iad.operation_owner_domain as operationOwnerDomain,
+        iad.operation_owner_tower as operationOwnerTower
+
+        FROM
+        <if test="useAccessReviewBean.isCurrentCycle == '0'.toString()">
+            user_access_review_history uar
+        </if>
+        <if test="useAccessReviewBean.isCurrentCycle == '1'.toString()">
+            user_access_review uar
+        </if>
+        left join its_application_data iad on uar.cmdb_id = iad.cmdb_id
+        left join ad_tb_upp_nature_2 atun on atun.user_name = uar.it_code_of_user
+        <include refid="Uar_Full_Conditions"></include>
+        ORDER BY uar.sequence_number
+    </select>
+
+    <select id="queryOverallStatistics" resultType="com.lenovo.bean.DashboardChartReviewBean$OverallStatistics">
+        SELECT
+        count(1) AS total,
+        COUNT(*) FILTER (
+            WHERE line_manager_review_status = '2' AND bpo_review_status = '2'
+        ) AS reviewed,
+        COALESCE( ROUND(
+            COUNT(*) FILTER (
+                WHERE line_manager_review_status = '2' AND bpo_review_status = '2'
+            ) * 100.0 / NULLIF(COUNT(*), 0), 2
+        ), 0.00 ) AS completionRate,
+        COALESCE( ROUND(
+            COUNT(*) FILTER (
+                WHERE line_manager_review_status = '2'
+            ) * 100.0 / NULLIF(COUNT(*), 0), 2
+        ), 0.00 ) AS lineManagerResponseRate,
+        COALESCE( ROUND(
+            COUNT(*) FILTER (
+                WHERE bpo_review_status = '2'
+            ) * 100.0 / NULLIF(COUNT(*), 0), 2
+        ), 0.00 ) AS bpoResponseRate
+
+        FROM
+        <if test="isCurrentCycle == '0'.toString()">
+            user_access_review_history uar
+        </if>
+        <if test="isCurrentCycle == '1'.toString()">
+            user_access_review uar
+        </if>
+        <where>
+            delete_flag = false
+            <choose>
+                <when test='dataRange.contains("*")'>
+                    <!-- 通配符，代表查询全部数据 -->
+                </when>
+                <otherwise>
+                    AND cmdb_id in (
+                    <foreach item="item" collection="dataRange" separator=",">
+                        #{item}
+                    </foreach>
+                    )
+                </otherwise>
+            </choose>
+            <if test="isCurrentCycle == '0'.toString()">
+                AND uar.maintenance_id = #{currentDataCycle}
+            </if>
+        </where>
+    </select>
+
+    <sql id="OverallList">
+        SELECT
+        uar.cmdb_id as cmdbId,
+        min(iad.application_name) as applicationName,
+        min(iad.operation_owner) AS appOperationOwner,
+        min(iad.operation_focal) AS appOperationFocal,
+        min(iad.operation_owner_domain) AS operationOwnerDomain,
+        min(iad.operation_owner_tower) AS operationOwnerTower,
+
+        count(1) AS total,
+        COUNT(*) FILTER (
+            WHERE line_manager_review_status = '2' AND bpo_review_status = '2'
+        ) AS reviewed,
+        COUNT(*) FILTER (
+            WHERE line_manager_review_status = '1' OR bpo_review_status = '1'
+        ) AS pendingReview,
+        COALESCE( ROUND(
+            COUNT(*) FILTER (
+                WHERE line_manager_review_status = '2' AND bpo_review_status = '2'
+            ) * 100.0 / COUNT(*), 2
+        ), 0.00 ) AS completionRate,
+        COALESCE( ROUND(
+            COUNT(*) FILTER (
+                WHERE line_manager_review_status = '2'
+            ) * 100.0 / COUNT(*), 2
+        ), 0.00 ) AS lineManagerResponseRate,
+        COALESCE( ROUND(
+            COUNT(*) FILTER (
+                WHERE bpo_review_status = '2'
+            ) * 100.0 / COUNT(*), 2
+        ), 0.00 ) AS bpoResponseRate,
+        COUNT(*) FILTER (WHERE final_review_decision = 'keep') AS keep,
+        COALESCE( ROUND( COUNT(*) FILTER (
+                WHERE final_review_decision = 'keep') * 100.0 /
+                NULLIF(COUNT(*) FILTER ( WHERE line_manager_review_status = '2' AND bpo_review_status = '2'), 0)
+        , 2 ), 0.00 ) AS keepRate,
+        COUNT(*) FILTER (WHERE line_manager_review_status = '2' AND bpo_review_status = '2' AND final_review_decision = 'remove') AS remove,
+        COALESCE( ROUND( COUNT(*) FILTER (
+            WHERE line_manager_review_status = '2' AND bpo_review_status = '2' AND final_review_decision = 'remove') * 100.0 /
+                NULLIF(COUNT(*) FILTER ( WHERE line_manager_review_status = '2' AND bpo_review_status = '2'), 0)
+        , 2 ), 0.00 ) AS removeRate
+
+        FROM
+        <if test="search.isCurrentCycle == '0'.toString()">
+            user_access_review_history uar
+        </if>
+        <if test="search.isCurrentCycle == '1'.toString()">
+            user_access_review uar
+        </if>
+        LEFT JOIN its_application_data iad ON uar.cmdb_id = iad.cmdb_id
+        <where>
+            uar.delete_flag = false
+            <if test='search.cmdbId != null and search.cmdbId != ""'>
+                AND uar.cmdb_id = #{search.cmdbId}
+            </if>
+            <if test='search.appName != null and search.appName != ""'>
+                AND iad.application_name = #{search.appName}
+            </if>
+            <if test='search.appOperationOwner != null and search.appOperationOwner != ""'>
+                AND iad.operation_owner = #{search.appOperationOwner}
+            </if>
+            <if test='search.appOperationFocal != null and search.appOperationFocal != ""'>
+                <choose>
+                    <when test="search.appOperationFocal == 'None'">
+                        AND iad.operation_focal IS NULL
+                    </when>
+                    <otherwise>
+                        AND iad.operation_focal = #{search.appOperationFocal}
+                    </otherwise>
+                </choose>
+            </if>
+            <if test='search.operationOwnerDomain != null and search.operationOwnerDomain != ""'>
+                AND iad.operation_owner_domain = #{search.operationOwnerDomain}
+            </if>
+            <if test='search.operationOwnerTower != null and search.operationOwnerTower != ""'>
+                AND iad.operation_owner_tower = #{search.operationOwnerTower}
+            </if>
+            <choose>
+                <when test='search.dataRange.contains("*")'>
+                    <!-- 通配符，代表查询全部数据 -->
+                </when>
+                <otherwise>
+                    AND uar.cmdb_id in (
+                    <foreach item="item" collection="search.dataRange" separator=",">
+                        #{item}
+                    </foreach>
+                    )
+                </otherwise>
+            </choose>
+            <if test="search.isCurrentCycle == '0'.toString()">
+                AND uar.maintenance_id = #{search.currentDataCycle}
+            </if>
+        </where>
+        GROUP BY
+        uar.cmdb_id
+        order by
+        <choose>
+            <when test='search.sortField != null and search.sortField != ""'>
+                ${search.sortField}
+            </when>
+            <otherwise>
+                uar.cmdb_id
+            </otherwise>
+        </choose>
+        <choose>
+            <when test='search.sortOrder != null and search.sortOrder != ""'>
+                ${search.sortOrder}
+            </when>
+            <otherwise>
+                ASC
+            </otherwise>
+        </choose>
+    </sql>
+
+    <select id="queryOverallPage" resultType="com.lenovo.bean.DashboardChartReviewBean$OverallList">
+        <include refid="OverallList" />
+    </select>
+
+    <select id="queryOverallList" resultType="com.lenovo.bean.DashboardChartReviewBean$OverallList">
+        <include refid="OverallList" />
+    </select>
+
+    <select id="queryLmLevelStatistics" resultType="com.lenovo.bean.DashboardChartReviewBean$LmLevelStatistics">
+        SELECT
+            CASE line_manager_level_code
+                WHEN '1' THEN 'Below'
+                WHEN '2' THEN 'ED'
+                WHEN '3' THEN 'VP'
+                WHEN '4' THEN 'Above'
+            END AS level,
+            COUNT(*) AS totalPerson,
+            SUM(item_cnt) AS totalItems,
+            SUM(CASE WHEN dedup.is_all_completed THEN 1 ELSE 0 END) AS completedPerson,
+            SUM(CASE WHEN NOT dedup.is_all_completed THEN 1 ELSE 0 END) AS uncompletedPerson
+        FROM (
+            SELECT line_manager,
+                line_manager_level_code,
+                COUNT(*) AS item_cnt,
+                BOOL_AND(line_manager_review_status = '2') AS is_all_completed
+            FROM
+            <if test="isCurrentCycle == '0'.toString()">
+                user_access_review_history uar
+            </if>
+            <if test="isCurrentCycle == '1'.toString()">
+                user_access_review uar
+            </if>
+            <where>
+                delete_flag = false
+                AND line_manager_level_code IS NOT NULL
+                <choose>
+                    <when test='dataRange.contains("*")'>
+                        <!-- 通配符，代表查询全部数据 -->
+                    </when>
+                    <otherwise>
+                        AND cmdb_id in (
+                        <foreach item="item" collection="dataRange" separator=",">
+                            #{item}
+                        </foreach>
+                        )
+                    </otherwise>
+                </choose>
+                <if test="isCurrentCycle == '0'.toString()">
+                    AND uar.maintenance_id = #{currentDataCycle}
+                </if>
+            </where>
+            GROUP BY line_manager, line_manager_level_code
+        ) AS dedup
+        GROUP BY line_manager_level_code
+    </select>
+
+    <sql id="PermissionDistributionSourceFilters">
+        uar.delete_flag = false
+        <if test='search.cmdbId != null and search.cmdbId != ""'>
+            AND uar.cmdb_id = #{search.cmdbId}
+        </if>
+        <if test='search.appName != null and search.appName != ""'>
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM its_application_data app_filter
+                    WHERE app_filter.cmdb_id = uar.cmdb_id
+                      AND app_filter.application_name = #{search.appName}
+                )
+                OR (
+                    uar.app_name = #{search.appName}
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM its_application_data app_exists
+                        WHERE app_exists.cmdb_id = uar.cmdb_id
+                          AND app_exists.application_name IS NOT NULL
+                    )
+                )
+            )
+        </if>
+        <choose>
+            <when test='search.dataRange.contains("*")'>
+                <!-- 通配符，代表查询全部数据 -->
+            </when>
+            <otherwise>
+                AND uar.cmdb_id IN (
+                <foreach item="item" collection="search.dataRange" separator=",">
+                    #{item}
+                </foreach>
+                )
+            </otherwise>
+        </choose>
+        <if test="search.isCurrentCycle == '0'.toString()">
+            AND uar.maintenance_id = #{search.currentDataCycle}
+        </if>
+    </sql>
+
+    <!-- 先按应用和用户压缩权限明细，再统计应用汇总，减少重复 COUNT(DISTINCT)。数据聚合完成后再关联，避免聚合前数据膨胀   -->
+    <sql id="PermissionDistributionCte">
+        WITH permission_by_user AS (
+            SELECT
+                uar.cmdb_id AS cmdbId,
+                uar.it_code_of_user AS itCodeOfUser,
+                MIN(uar.app_name) AS snapshotAppName,
+                MIN(uar.user_coc_type) AS userCocType,
+                COUNT(*) AS totalPermissions,
+                COUNT(*) FILTER (
+                    WHERE uar.user_coc_type = 'Y'
+                ) AS cocAssignedPermissions,
+                COUNT(*) FILTER (
+                    WHERE uar.user_coc_type = 'N'
+                ) AS nonCocAssignedPermissions,
+                COUNT(*) FILTER (
+                    WHERE uar.user_coc_type IS NULL
+                ) AS invalidUsersAssignedPermissions
+            FROM
+            <if test="search.isCurrentCycle == '0'.toString()">
+                user_access_review_history uar
+            </if>
+            <if test="search.isCurrentCycle == '1'.toString()">
+                user_access_review uar
+            </if>
+            <where>
+                <include refid="PermissionDistributionSourceFilters" />
+            </where>
+            GROUP BY uar.cmdb_id, uar.it_code_of_user
+        ),
+        permission_distribution AS (
+            SELECT
+                cmdbId,
+                MIN(snapshotAppName) AS snapshotAppName,
+                COUNT(*) AS totalUsers,
+                SUM(totalPermissions)::bigint AS totalPermissions,
+                COUNT(*) FILTER (
+                    WHERE userCocType = 'Y'
+                ) AS cocUsers,
+                SUM(cocAssignedPermissions)::bigint AS cocAssignedPermissions,
+                COUNT(*) FILTER (
+                    WHERE userCocType = 'N'
+                ) AS nonCocUsers,
+                SUM(nonCocAssignedPermissions)::bigint AS nonCocAssignedPermissions,
+                COUNT(*) FILTER (
+                    WHERE userCocType IS NULL
+                ) AS invalidUsers,
+                SUM(invalidUsersAssignedPermissions)::bigint AS invalidUsersAssignedPermissions
+            FROM permission_by_user
+            GROUP BY cmdbId
+        )
+    </sql>
+
+    <select id="queryPermissionDistributionTop10"
+            resultType="com.lenovo.bean.PermissionDistributionBean$Top10">
+        <include refid="PermissionDistributionCte" />
+        SELECT
+            COALESCE(iad.application_name, pd.snapshotAppName) AS applicationName,
+            pd.cocUsers,
+            pd.nonCocUsers
+        FROM permission_distribution pd
+        LEFT JOIN its_application_data iad ON iad.cmdb_id = pd.cmdbId
+        ORDER BY pd.cocUsers DESC, pd.totalUsers DESC, pd.cmdbId ASC
+        LIMIT 10
+    </select>
+
+    <select id="countPermissionDistribution" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT uar.cmdb_id)
+        FROM
+        <if test="search.isCurrentCycle == '0'.toString()">
+            user_access_review_history uar
+        </if>
+        <if test="search.isCurrentCycle == '1'.toString()">
+            user_access_review uar
+        </if>
+        <where>
+            <include refid="PermissionDistributionSourceFilters" />
+        </where>
+    </select>
+
+    <sql id="PermissionDistributionDetailSelect">
+        SELECT
+            pd.cmdbId,
+            COALESCE(iad.application_name, pd.snapshotAppName) AS applicationName,
+            pd.totalUsers,
+            pd.totalPermissions,
+            pd.cocUsers,
+            pd.cocAssignedPermissions,
+            pd.nonCocUsers,
+            pd.nonCocAssignedPermissions,
+            pd.invalidUsers,
+            pd.invalidUsersAssignedPermissions,
+            COALESCE(ROUND(
+                pd.cocUsers * 100.0 / NULLIF(pd.totalUsers, 0), 2
+            ), 0.00) AS cocUserPercentage,
+            COALESCE(ROUND(
+                pd.cocAssignedPermissions * 100.0 / NULLIF(pd.totalPermissions, 0), 2
+            ), 0.00) AS cocPermissionPercentage
+        FROM permission_distribution pd
+        LEFT JOIN its_application_data iad ON iad.cmdb_id = pd.cmdbId
+    </sql>
+
+    <sql id="PermissionDistributionOrderBy">
+        ORDER BY
+        <choose>
+            <when test="search.sortField == 'applicationName'">applicationName</when>
+            <when test="search.sortField == 'totalUsers'">totalUsers</when>
+            <when test="search.sortField == 'totalPermissions'">totalPermissions</when>
+            <when test="search.sortField == 'cocUsers'">cocUsers</when>
+            <when test="search.sortField == 'cocAssignedPermissions'">cocAssignedPermissions</when>
+            <when test="search.sortField == 'nonCocUsers'">nonCocUsers</when>
+            <when test="search.sortField == 'nonCocAssignedPermissions'">nonCocAssignedPermissions</when>
+            <when test="search.sortField == 'invalidUsers'">invalidUsers</when>
+            <when test="search.sortField == 'invalidUsersAssignedPermissions'">invalidUsersAssignedPermissions</when>
+            <when test="search.sortField == 'cocUserPercentage'">cocUserPercentage</when>
+            <when test="search.sortField == 'cocPermissionPercentage'">cocPermissionPercentage</when>
+            <otherwise>cmdbId</otherwise>
+        </choose>
+        <choose>
+            <when test="search.sortOrder == 'desc'">DESC</when>
+            <otherwise>ASC</otherwise>
+        </choose>
+        <if test="search.sortField != null and search.sortField != 'cmdbId'">
+            , cmdbId ASC
+        </if>
+    </sql>
+
+    <select id="queryPermissionDistributionPage"
+            resultType="com.lenovo.bean.PermissionDistributionBean$Detail">
+        <include refid="PermissionDistributionCte" />
+        <include refid="PermissionDistributionDetailSelect" />
+        <include refid="PermissionDistributionOrderBy" />
+    </select>
+
+    <select id="queryPermissionDistributionList"
+            resultType="com.lenovo.bean.PermissionDistributionBean$Detail">
+        <include refid="PermissionDistributionCte" />
+        <include refid="PermissionDistributionDetailSelect" />
+        <include refid="PermissionDistributionOrderBy" />
+    </select>
+
+
+</mapper>

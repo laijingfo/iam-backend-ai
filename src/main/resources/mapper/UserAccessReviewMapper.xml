@@ -1,0 +1,1597 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.UserAccessReviewMapper">
+
+    <!-- 邮件发送记录的结果映射 -->
+    <resultMap id="EmailSendResultMap" type="com.lenovo.entity.UseAccessReviewEmailSend">
+        <result property="id" column="es_id" jdbcType="BIGINT"/>
+        <result property="reviewUuid" column="es_review_uuid" jdbcType="VARCHAR"/>
+        <result property="sendRound" column="es_send_round" jdbcType="INTEGER"/>
+        <result property="sendTime" column="es_send_time" jdbcType="TIMESTAMP"/>
+        <result property="sendStatus" column="es_send_status" jdbcType="VARCHAR"/>
+        <result property="recipientType" column="es_recipient_type" jdbcType="VARCHAR"/>
+        <result property="recipientEmail" column="es_recipient_email" jdbcType="VARCHAR"/>
+        <result property="templateId" column="es_template_id" jdbcType="BIGINT"/>
+        <result property="errorMessage" column="es_error_message" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <!-- 主表的主要结果映射 -->
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.UserAccessReview" autoMapping="false">
+        <!-- 基础字段映射 -->
+        <result property="sequenceNumber" column="sequence_number" jdbcType="VARCHAR"/>
+        <result property="itCodeOfUser" column="it_code_of_user" jdbcType="VARCHAR"/>
+        <result property="email" column="email" jdbcType="VARCHAR"/>
+        <result property="userName" column="user_name" jdbcType="VARCHAR"/>
+        <result property="country" column="country" jdbcType="VARCHAR"/>
+        <result property="department" column="department" jdbcType="VARCHAR"/>
+        <result property="appName" column="app_name" jdbcType="VARCHAR"/>
+        <result property="cmdbId" column="cmdb_id" jdbcType="VARCHAR"/>
+        <result property="userId" column="user_id" jdbcType="VARCHAR"/>
+        <result property="userIdValidTo" column="user_id_valid_to" jdbcType="DATE"/>
+        <result property="authorizationTechnicalName" column="authorization_technical_name" jdbcType="VARCHAR"/>
+        <result property="authorizationDescription" column="authorization_description" jdbcType="VARCHAR"/>
+        <result property="authorizationValidTo" column="authorization_valid_to" jdbcType="DATE"/>
+        <result property="accessLabel" column="access_label" jdbcType="VARCHAR"/>
+        <result property="firstLineManager" column="first_line_manager" jdbcType="VARCHAR"/>
+        <result property="secondLineManager" column="second_line_manager" jdbcType="VARCHAR"/>
+        <result property="itCodeOfBpo" column="it_code_of_bpo" jdbcType="VARCHAR"/>
+        <result property="bpoReviewDecision" column="bpo_review_decision" jdbcType="VARCHAR"/>
+        <result property="userIdLock" column="user_id_lock" jdbcType="VARCHAR"/>
+        <result property="accessReviewDecision" column="access_review_decision" jdbcType="VARCHAR"/>
+        <result property="auditTrail" column="audit_trail" jdbcType="VARCHAR"/>
+        <result property="systemRoleId" column="system_role_id" jdbcType="VARCHAR"/>
+        <result property="systemRole" column="system_role" jdbcType="VARCHAR"/>
+        <result property="roleDescription" column="role_description" jdbcType="VARCHAR"/>
+        <result property="bpoReviewStatus" column="bpo_review_status" jdbcType="VARCHAR"/>
+        <result property="lineManagerReviewStatus" column="line_manager_review_status" jdbcType="VARCHAR"/>
+        <result property="lineManagersReviewDecision" column="line_managers_review_decision" jdbcType="VARCHAR"/>
+        <result property="finalReviewDecision" column="final_review_decision" jdbcType="VARCHAR"/>
+        <result property="lineManager" column="line_manager" jdbcType="VARCHAR"/>
+        <result property="bpo" column="bpo" jdbcType="VARCHAR"/>
+        <result property="roleValidTo" column="role_valid_to" jdbcType="VARCHAR"/>
+        <result property="overallSendStatus" column="overall_send_status" jdbcType="VARCHAR"/>
+        <result property="currentRound" column="current_round" jdbcType="INTEGER"/>
+        <result property="uuid" column="uuid" jdbcType="VARCHAR"/>
+        <result property="lineManagerEmail" column="line_manager_email" jdbcType="VARCHAR"/>
+        <result property="bpoEmail" column="bpo_email" jdbcType="VARCHAR"/>
+        <result property="userCocType" column="user_coc_type" jdbcType="VARCHAR"/>
+        <result property="bpoCocType" column="bpo_coc_type" jdbcType="VARCHAR"/>
+        <result property="finalReviewTime" column="final_review_time" jdbcType="VARCHAR"/>
+
+        <!-- Line Manager 邮件状态集合 -->
+        <collection property="lineManagerEmailStatus" ofType="com.lenovo.entity.UseAccessReviewEmailSend"
+                    resultMap="EmailSendResultMap" columnPrefix="lm_"/>
+
+        <!-- BPO 邮件状态集合 -->
+        <collection property="bpoEmailStatus" ofType="com.lenovo.entity.UseAccessReviewEmailSend"
+                    resultMap="EmailSendResultMap" columnPrefix="bpo_"/>
+    </resultMap>
+
+    <!-- 发送邮件之后批量更新邮件发送状态 -->
+    <update id="updateOverallSendStatusBatch">
+        UPDATE user_access_review
+        SET overall_send_status = #{status}
+        WHERE sequence_number IN
+        <foreach collection="sequenceNumbers" item="sequenceNumber" open="(" separator="," close=")">
+            #{sequenceNumber}
+        </foreach>
+    </update>
+
+    <!--selectBySendStatus方法的Collection映射有问题，所以使用下面的方法-->
+    <!--查询Sending Sent Failed三种状态在不同权限下的邮件-->
+    <select id="selectBySendStatusToRewrite" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT app.application_name as app_name,uart.* FROM user_access_review uart
+        LEFT JOIN its_application_data app ON uart.cmdb_id = app.cmdb_id
+        WHERE 1=1
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND uart.it_code_of_user = #{bean.itCodeOfUser}
+        </if>
+        <if test="bean.lineManager != null and bean.lineManager != ''">
+            AND uart.line_manager = #{bean.lineManager}
+        </if>
+        <if test="bean.lineManagerLevelCode != null and bean.lineManagerLevelCode != ''">
+            AND uart.line_manager_level_code = #{bean.lineManagerLevelCode}
+        </if>
+        <if test="bean.dept != null and bean.dept != ''">
+            AND uart.dept like '%'||#{bean.dept}||'%'
+        </if>
+        <if test="bean.lineManagerReviewStatus != null and bean.lineManagerReviewStatus != ''">
+            AND uart.line_manager_review_status = #{bean.lineManagerReviewStatus}
+        </if>
+        <if test="bean.bpo != null and bean.bpo != ''">
+            AND uart.bpo = #{bean.bpo}
+        </if>
+        <if test="bean.bpoReviewStatus != null and bean.bpoReviewStatus != ''">
+            AND uart.bpo_review_status = #{bean.bpoReviewStatus}
+        </if>
+        <if test="bean.cmdbIdListOfChoose != null and bean.cmdbIdListOfChoose.size() > 0">
+            AND uart.cmdb_id IN
+            <foreach collection="bean.cmdbIdListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <if test="bean.appNameListOfChoose != null and bean.appNameListOfChoose.size() > 0">
+            AND app.application_name IN
+            <foreach collection="bean.appNameListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        AND (COALESCE(uart.bpo_review_status, '') != '2' OR COALESCE(uart.line_manager_review_status, '') != '2')
+        AND (COALESCE(uart.bpo_band_ed_flag, '') != '1' OR COALESCE(uart.line_manager_band_ed_flag, '') != '1')
+        AND uart.delete_flag = false
+        AND uart.overall_send_status = #{overallSendStatus}
+        <!--<choose>
+            <when test='overallSendStatus == "Sent"'>
+                AND uart.current_round <![CDATA[ <= ]]> 6
+            </when>
+            <otherwise>
+                AND uart.current_round <![CDATA[ < ]]> 6
+            </otherwise>
+        </choose>-->
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3"'>
+                AND uart.cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+
+
+    <!--发送通知:更新待发送列表-->
+    <update id="updateWaitPendingList">
+        update user_access_review
+        set overall_send_status = 'Pending'
+        where overall_send_status='Sent'
+        and (COALESCE(bpo_review_status, '') != '2' OR COALESCE(line_manager_review_status, '') != '2')
+        <!-- and current_round <![CDATA[ < ]]> 6 -->
+        <choose >
+            <when test='roleFlag != null and roleFlag.trim() == "2"'>
+            </when>
+            <when test='roleFlag != null and roleFlag.trim() == "3" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1=2
+            </otherwise>
+        </choose>
+    </update>
+
+    <sql id="findHistoryRecordConditions">
+        <where>
+            uar.delete_flag = false
+            <if test="useAccessReviewBean.itCodeOfUser != null and useAccessReviewBean.itCodeOfUser != ''">
+                and uar.it_code_of_user = #{useAccessReviewBean.itCodeOfUser}
+            </if>
+            <if test="useAccessReviewBean.appName != null and useAccessReviewBean.appName != ''">
+                and app.application_name = #{useAccessReviewBean.appName}
+            </if>
+            <if test="useAccessReviewBean.cmdbId != null and useAccessReviewBean.cmdbId != ''">
+                and uar.cmdb_id = #{useAccessReviewBean.cmdbId}
+            </if>
+            <if test="useAccessReviewBean.lineManager != null and useAccessReviewBean.lineManager != ''">
+                <choose>
+                    <when test="useAccessReviewBean.lineManager == 'None'">
+                        and uar.line_manager is null
+                    </when>
+                    <otherwise>
+                        and uar.line_manager = #{useAccessReviewBean.lineManager}
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="useAccessReviewBean.bpo != null and useAccessReviewBean.bpo != ''">
+                <choose>
+                    <when test="useAccessReviewBean.bpo == 'None'">
+                        and (uar.bpo IS NULL or uar.bpo = '')
+                    </when>
+                    <otherwise>
+                        and uar.bpo like  '%'||#{useAccessReviewBean.bpo}||'%'
+                    </otherwise>
+                </choose>
+            </if>
+
+            <if test="useAccessReviewBean.lineManagersReviewDecision != null and useAccessReviewBean.lineManagersReviewDecision != ''">
+                AND uar.line_managers_review_decision = #{useAccessReviewBean.lineManagersReviewDecision}
+            </if>
+
+            <if test="useAccessReviewBean.bpoReviewDecision != null and useAccessReviewBean.bpoReviewDecision != ''">
+                AND uar.bpo_review_decision = #{useAccessReviewBean.bpoReviewDecision}
+            </if>
+
+            <if test="useAccessReviewBean.finalReviewDecision != null and useAccessReviewBean.finalReviewDecision != ''">
+                AND uar.final_review_decision = #{useAccessReviewBean.finalReviewDecision}
+            </if>
+
+            <if test="useAccessReviewBean.lineManagerLevelCode != null and useAccessReviewBean.lineManagerLevelCode != ''">
+                AND uar.line_manager_level_code = #{useAccessReviewBean.lineManagerLevelCode}
+            </if>
+            <if test="useAccessReviewBean.lineManagerReviewStatus != null and useAccessReviewBean.lineManagerReviewStatus != ''">
+                AND uar.line_manager_review_status = #{useAccessReviewBean.lineManagerReviewStatus}
+            </if>
+            <if test="useAccessReviewBean.bpoReviewStatus != null and useAccessReviewBean.bpoReviewStatus != ''">
+                AND uar.bpo_review_status = #{useAccessReviewBean.bpoReviewStatus}
+            </if>
+            <if test="useAccessReviewBean.dept != null and useAccessReviewBean.dept != ''">
+                AND uar.dept like '%'||#{useAccessReviewBean.dept}||'%'
+            </if>
+            <choose>
+                <when test='useAccessReviewBean.dataRange.contains("*")'>
+                    <!-- 通配符，代表查询全部数据 -->
+                </when>
+                <otherwise>
+                    AND uar.cmdb_id in (
+                    <foreach item="item" collection="useAccessReviewBean.dataRange" separator=",">
+                        #{item}
+                    </foreach>
+                    )
+                </otherwise>
+            </choose>
+            <if test="useAccessReviewBean.lineManagerReviewTime != null and useAccessReviewBean.lineManagerReviewTime != ''">
+                and uar.line_manager_review_time::date = #{useAccessReviewBean.lineManagerReviewTime}
+            </if>
+            <if test="useAccessReviewBean.bpoReviewTime != null and useAccessReviewBean.bpoReviewTime != ''">
+                and uar.bpo_review_time::date = #{useAccessReviewBean.bpoReviewTime}
+            </if>
+            <if test="useAccessReviewBean.systemRole != null and useAccessReviewBean.systemRole != ''">
+                and lower(uar.system_role) like '%'||lower(#{useAccessReviewBean.systemRole})||'%'
+            </if>
+            <if test="useAccessReviewBean.exceptionTicketNo != null and useAccessReviewBean.exceptionTicketNo != ''">
+                AND uar.exception_ticket_no = #{useAccessReviewBean.exceptionTicketNo}
+            </if>
+            <if test="useAccessReviewBean.exceptionResultDecision != null and useAccessReviewBean.exceptionResultDecision != ''">
+                AND uar.exception_result_decision = #{useAccessReviewBean.exceptionResultDecision}
+            </if>
+            <if test="useAccessReviewBean.exceptionReason != null and useAccessReviewBean.exceptionReason != ''">
+                and uar.bpo_result_reason like '%'||#{useAccessReviewBean.exceptionReason}||'%'
+            </if>
+            <if test="useAccessReviewBean.exceptionAdjustedBy != null and useAccessReviewBean.exceptionAdjustedBy != ''">
+                AND uar.exception_adjusted_by = #{useAccessReviewBean.exceptionAdjustedBy}
+            </if>
+            <if test="useAccessReviewBean.exceptionAdjustedTime != null and useAccessReviewBean.exceptionAdjustedTime != ''">
+                and uar.exception_adjusted_time::date = #{useAccessReviewBean.exceptionAdjustedTime}
+            </if>
+        </where>
+    </sql>
+
+    <select id="selectHistoryRecords" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT
+            uar.id,
+            uar.uuid,
+            uar.sequence_number,
+            uar.cmdb_id,
+            app.application_name as app_name,
+            uar.it_code_of_user,
+            uar.system_role,
+            uar.role_description,
+            uar.dept,
+            uar.line_manager_level_code,
+            uar.line_manager,
+            uar.line_manager_email,
+            uar.line_manager_review_status,
+            uar.line_managers_review_decision,
+            uar.line_manager_review_itcode,
+            uar.line_manager_review_time,
+            uar.bpo,
+            uar.bpo_email,
+            uar.user_coc_type,
+            uar.bpo_coc_type,
+            uar.bpo_review_status,
+            uar.bpo_review_decision,
+            uar.bpo_review_itcode,
+            uar.bpo_review_time,
+            uar.final_review_decision,
+            uar.final_review_time,
+            uar.final_review_result_reason,
+            uar.exception_ticket_no,
+            uar.exception_result_decision,
+            uar.exception_reason,
+            uar.exception_adjusted_by,
+            uar.exception_adjusted_time
+        FROM user_access_review uar
+        LEFT JOIN its_application_data app ON uar.cmdb_id = app.cmdb_id
+        <include refid="findHistoryRecordConditions" />
+        ORDER BY uar.sequence_number
+
+    </select>
+
+    <!--(发送中，已发送，发送失败)overall_send_status的情况下获取去重应用名称列表-->
+    <select id="selectDistinctApplicationBySendStatus" resultType="com.lenovo.bean.AdvancedSearchBean">
+        SELECT
+            sub.label AS label,
+            sub.value AS value
+        FROM
+            (SELECT DISTINCT app.application_name AS label,t.cmdb_id AS value
+            FROM user_access_review t
+            LEFT JOIN its_application_data app ON t.cmdb_id = app.cmdb_id
+            WHERE
+            t.overall_send_status = #{overallSendStatus}
+            <choose >
+                <when test='roleFlag == "2"'>
+                </when>
+                <when test='roleFlag == "3"'>
+                    AND t.cmdb_id IN
+                    <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                        #{seq}
+                    </foreach>
+                </when>
+                <otherwise>
+                    and 1=2
+                </otherwise>
+            </choose>
+            ORDER BY label) AS sub
+    </select>
+
+    <select id="selectAllHistoryRecords"  resultType="com.lenovo.entity.UserAccessReview">
+        SELECT
+        uar.sequence_number,
+        uar.cmdb_id,
+        app.application_name AS app_name,
+        uar.user_name,
+        uar.system_role,
+        uar.role_description,
+        leit_system_id,
+        leit_system_name,
+        uar.country,
+        uar.it_code_of_user,
+        uar.user_id,
+        uar.user_real_name,
+        uar.department,
+        uar.email,
+        uar.line_manager,
+        uar.line_manager_email,
+        uar.line_manager_review_itcode,
+        uar.line_manager_review_time,
+        uar.bpo,
+        uar.bpo_email,
+        uar.user_coc_type,
+        uar.bpo_coc_type,
+        uar.bpo_review_itcode,
+        uar.bpo_review_time,
+        uar.bpo_update_by,
+        uar.bpo_update_time,
+        uar.access_label AS accessLabel,
+
+        <choose>
+            <when test="language != null and language == 'CN'">
+                CASE uar.bpo_review_status
+                WHEN '1' THEN '未审核'
+                WHEN '2' THEN '已审核'
+                ELSE COALESCE(uar.bpo_review_status, '未知')
+                END AS bpo_review_status,
+
+                CASE uar.line_manager_review_status
+                WHEN '1' THEN '未审核'
+                WHEN '2' THEN '已审核'
+                ELSE COALESCE(uar.line_manager_review_status, '未知')
+                END AS line_manager_review_status,
+
+                CASE uar.line_managers_review_decision
+                WHEN 'keep' THEN '保留'
+                WHEN 'remove' THEN '移除'
+                ELSE uar.line_managers_review_decision
+                END AS line_managers_review_decision,
+
+                CASE uar.bpo_review_decision
+                WHEN 'keep' THEN '保留'
+                WHEN 'remove' THEN '移除'
+                ELSE uar.bpo_review_decision
+                END AS bpo_review_decision,
+
+                CASE uar.final_review_decision
+                    WHEN 'keep' THEN '保留'
+                    WHEN 'remove' THEN '移除'
+                    ELSE final_review_decision
+                END AS final_review_decision,
+
+                CASE uar.exception_result_decision
+                    WHEN 'keep' THEN '保留'
+                    WHEN 'remove' THEN '移除'
+                    ELSE uar.exception_result_decision
+                END AS exception_result_decision,
+            </when>
+            <otherwise>
+                CASE uar.bpo_review_status
+                WHEN '1' THEN 'Pending Review'
+                WHEN '2' THEN 'Reviewed'
+                ELSE COALESCE(uar.bpo_review_status, 'Unknown')
+                END AS bpo_review_status,
+
+                CASE uar.line_manager_review_status
+                WHEN '1' THEN 'Pending Review'
+                WHEN '2' THEN 'Reviewed'
+                ELSE COALESCE(uar.line_manager_review_status, 'Unknown')
+                END AS line_manager_review_status,
+
+                uar.line_managers_review_decision,
+                uar.bpo_review_decision,
+
+                uar.final_review_decision,
+
+                uar.exception_result_decision,
+            </otherwise>
+        </choose>
+        uar.dept,
+        case uar.line_manager_level_code
+            when '1' then 'Director and below'
+            when '2' then 'ED'
+            when '3' then 'VP'
+            when '4' then 'SVP and above'
+        END as lineManagerLevelCode,
+        uar.final_review_time,
+        uar.final_review_result_reason,
+        uar.exception_ticket_no,
+        uar.exception_reason,
+        uar.exception_adjusted_by,
+        uar.exception_adjusted_time
+
+        FROM user_access_review uar
+        LEFT JOIN its_application_data app ON uar.cmdb_id = app.cmdb_id
+        <include refid="findHistoryRecordConditions" />
+        ORDER BY uar.sequence_number
+    </select>
+
+
+    <!--发送邮件获取Uar周期的结束时间-->
+    <select id="getuarCycleEndDateByuarId" resultType="java.lang.String">
+        SELECT  COALESCE(CAST(ucc.uar_cycle_end_date AS VARCHAR), '') AS uar_cycle_end_date
+        FROM user_access_review uar
+        LEFT JOIN uar_cycle_maintenance ucc
+        ON uar.uar_id = CAST(ucc.id AS VARCHAR)
+        WHERE uar.uar_id = #{uarId, jdbcType=VARCHAR}
+        LIMIT 1
+    </select>
+
+    <update id="localMergeUarDoUpdateByCmdbId">
+        WITH ignore_rule AS (
+        /* 当前 cmdb 对应的忽略规则，支持前缀通配符 */
+            SELECT system_role
+            FROM sync_uar_ignore_rule
+            WHERE cmdb_id = #{cmdbId}
+        ),
+        filtered_access AS (
+        /* 先缩小到当前应用的数据集，避免后续 CoC 计算扫描其他应用 */
+            SELECT a.*,
+                COALESCE(
+                    NULLIF(TRIM(a.bpo), ''),
+                    NULLIF(TRIM(a.app_bpo), ''),
+                    ''
+                ) AS coc_bpo_source
+            FROM its_application_access_data a
+            WHERE a.cmdb_id = #{cmdbId}
+                AND (#{accessReviewScope} != 'SENSITIVE_ACCESS' OR a.access_label = 'sensitive')
+                AND a.user_it_code IS NOT NULL
+                AND a.system_role_id IS NOT NULL
+                AND a.system_role IS NOT NULL
+                /* 第一步：精确匹配优先过滤 */
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM ignore_rule ir
+                    WHERE ir.system_role NOT LIKE '%*%'
+                    AND ir.system_role NOT LIKE '%#%'
+                    AND a.system_role = ir.system_role
+                )
+                /* 第二步：再处理模糊规则 */
+                AND (
+                -- 不被 * 规则命中
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM ignore_rule ir
+                        WHERE ir.system_role LIKE '%*%'
+                        AND ir.system_role NOT LIKE '%#%'
+                        AND a.system_role LIKE REPLACE(REPLACE(ir.system_role, '_', '\_'), '*', '%') ESCAPE '\'
+                    )
+                    -- 或者被 # 规则捞回来
+                    OR EXISTS (
+                        SELECT 1
+                        FROM ignore_rule ir
+                        WHERE ir.system_role LIKE '%#%'
+                        AND a.system_role LIKE REPLACE(REPLACE(ir.system_role, '_', '\_'), '#', '%') ESCAPE '\'
+                    )
+                )
+        ),
+        bpo_source AS (
+        /* 相同 BPO 配置只拆分一次，不再按每条权限重复执行正则 */
+            SELECT DISTINCT coc_bpo_source
+            FROM filtered_access
+            WHERE coc_bpo_source != ''
+        ),
+        bpo_item AS (
+            SELECT source.coc_bpo_source,
+                LOWER(TRIM(item.value)) AS user_name_key
+            FROM bpo_source source
+            CROSS JOIN LATERAL regexp_split_to_table(source.coc_bpo_source, '[,;]') AS item(value)
+            WHERE TRIM(item.value) != ''
+        ),
+        relevant_upp_key AS (
+        /* 仅聚合本次同步实际涉及的 User/BPO */
+            SELECT LOWER(user_it_code) AS user_name_key
+            FROM filtered_access
+            UNION
+            SELECT user_name_key
+            FROM bpo_item
+        ),
+        upp_coc AS (
+            SELECT LOWER(upp.user_name) AS user_name_key,
+                MAX(
+                    CASE
+                        WHEN UPPER(TRIM(upp.coc_flag)) IN ('Y', 'N')
+                            THEN UPPER(TRIM(upp.coc_flag))
+                        ELSE NULL
+                    END
+                ) AS coc_type
+            FROM ad_tb_upp_nature_2 upp
+            INNER JOIN relevant_upp_key relevant
+                ON relevant.user_name_key = LOWER(upp.user_name)
+            GROUP BY LOWER(upp.user_name)
+        ),
+        bpo_coc AS (
+            SELECT item.coc_bpo_source,
+                CASE
+                    WHEN COUNT(DISTINCT item.user_name_key) = 1
+                        THEN MAX(upp.coc_type)
+                    ELSE NULL
+                END AS bpo_coc_type
+            FROM bpo_item item
+            LEFT JOIN upp_coc upp
+                ON upp.user_name_key = item.user_name_key
+            GROUP BY item.coc_bpo_source
+        ),
+        x AS (
+            SELECT a.cmdb_id,
+                a.application_name,
+                a.user_it_code,
+                a.user_name,
+                a.user_real_name,
+                a.email,
+                a.country,
+                a.department,
+                a.user_id,
+                a.user_id_valid_to,
+                a.access_label,
+                a.system_role_id,
+                a.system_role,
+                a.leit_system_id,
+                a.leit_system_name,
+                a.role_description,
+                a.role_valid_to,
+                a.line_manager,
+                a.line_manager_email,
+                CASE
+                    WHEN a.line_manager_band_ed_flag = '1' THEN '1'
+                    WHEN b.band_flag = '1' THEN '1'
+                    ELSE '0'
+                END AS line_manager_band_ed_flag,
+                CASE
+                    WHEN TRIM(bpo) != '' THEN bpo
+                    WHEN TRIM(app_bpo) != '' THEN app_bpo
+                    ELSE NULL
+                END AS bpo,
+                CASE
+                    WHEN TRIM(bpo_email) != '' THEN bpo_email
+                    WHEN TRIM(app_bpo_email) != '' THEN app_bpo_email
+                    ELSE NULL
+                END AS bpo_email,
+                CASE
+                    WHEN TRIM(bpo_band_ed_flag) != '' THEN bpo_band_ed_flag
+                    WHEN TRIM(app_bpo_band_ed_flag) != '' THEN app_bpo_band_ed_flag
+                    ELSE NULL
+                END AS bpo_band_ed_flag,
+                a.app_bpo,
+                a.app_bpo_email,
+                a.app_bpo_band_ed_flag,
+                a.backup_bpo,
+                a.backup_bpo_email,
+                a.backup_bpo_band_ed_flag,
+
+                user_upp.coc_type AS user_coc_type,
+                bpo_coc.bpo_coc_type,
+
+                CASE
+                WHEN b.management_level IN ('ED', 'Executive Director') THEN '2'
+                WHEN b.management_level IN ('VP', 'Vice President') THEN '3'
+                WHEN b.management_level IN ('SVP', 'Senior Vice President', 'EVP', 'Executive Vice President', 'CEO', 'Chief Executive Officer') THEN '4'
+                ELSE '1'
+                END AS line_manager_level_code,
+                b.lenovo_dept AS dept
+
+            FROM filtered_access a
+                LEFT JOIN ad_tb_upp_nature_2 b ON b.user_name = a.line_manager
+                LEFT JOIN upp_coc user_upp
+                    ON user_upp.user_name_key = LOWER(a.user_it_code)
+                LEFT JOIN bpo_coc
+                    ON bpo_coc.coc_bpo_source = a.coc_bpo_source
+        ),
+
+        upsert AS (
+            INSERT INTO user_access_review
+            (cmdb_id, app_name, it_code_of_user, user_name, user_real_name, email,
+             country, department, user_id, user_id_valid_to,
+             access_label, system_role_id, system_role, leit_system_id, leit_system_name, role_description, role_valid_to,
+             line_manager, line_manager_email, bpo, bpo_email, delete_flag, sequence_number,
+             app_bpo, app_bpo_email, backup_bpo, backup_bpo_email, bpo_band_ed_flag,
+             backup_bpo_band_ed_flag, app_bpo_band_ed_flag, uuid, uar_id, line_manager_band_ed_flag,
+             line_manager_level_code, dept, user_coc_type, bpo_coc_type, create_time, create_by
+            )
+            SELECT cmdb_id, application_name, user_it_code, user_name, user_real_name, email,
+                country, department, user_id, user_id_valid_to,
+                access_label, system_role_id, system_role, leit_system_id, leit_system_name, role_description, role_valid_to,
+                line_manager, line_manager_email, REPLACE(bpo, ',', ';') as bpo, REPLACE(bpo_email, ',', ';') as bpo_email, false,
+                'UAR' || TO_CHAR(CURRENT_DATE, 'YYYYMMDD') || LPAD(NEXTVAL('public.uar_sequence')::TEXT, 8, '0'),
+                REPLACE(app_bpo, ',', ';') as app_bpo, REPLACE(app_bpo_email, ',', ';') as app_bpo_email,REPLACE(backup_bpo, ',', ';') as backup_bpo,REPLACE(backup_bpo_email, ',', ';') as backup_bpo_email, bpo_band_ed_flag,
+                backup_bpo_band_ed_flag, app_bpo_band_ed_flag, gen_random_uuid(), #{uarId}, line_manager_band_ed_flag,
+                line_manager_level_code, dept, user_coc_type, bpo_coc_type, CURRENT_TIMESTAMP, 'SYNC_UAR'
+            FROM   x
+                ON CONFLICT (cmdb_id, it_code_of_user, user_id, system_role_id, system_role)
+            DO UPDATE
+            SET app_name       = EXCLUDED.app_name,
+                user_name          = EXCLUDED.user_name,
+                user_real_name     = EXCLUDED.user_real_name,
+                email              = EXCLUDED.email,
+                country            = EXCLUDED.country,
+                department         = EXCLUDED.department,
+                user_id            = EXCLUDED.user_id,
+                user_id_valid_to   = EXCLUDED.user_id_valid_to,
+                access_label       = EXCLUDED.access_label,
+                role_description   = EXCLUDED.role_description,
+                leit_system_id     = EXCLUDED.leit_system_id,
+                leit_system_name   = EXCLUDED.leit_system_name,
+                role_valid_to      = EXCLUDED.role_valid_to,
+                line_manager       = EXCLUDED.line_manager,
+                line_manager_email = EXCLUDED.line_manager_email,
+                bpo                = EXCLUDED.bpo,
+                bpo_email          = EXCLUDED.bpo_email,
+                delete_flag        = false,      -- 如果曾被逻辑删除，重新复活
+                app_bpo            = EXCLUDED.app_bpo,
+                app_bpo_email      = EXCLUDED.app_bpo_email,
+                backup_bpo         = EXCLUDED.backup_bpo,
+                backup_bpo_email   = EXCLUDED.backup_bpo_email,
+                bpo_band_ed_flag     = EXCLUDED.bpo_band_ed_flag,
+                backup_bpo_band_ed_flag = EXCLUDED.backup_bpo_band_ed_flag,
+                app_bpo_band_ed_flag = EXCLUDED.app_bpo_band_ed_flag,
+                uar_id              = EXCLUDED.uar_id,
+                line_manager_band_ed_flag = EXCLUDED.line_manager_band_ed_flag,
+                line_manager_level_code  = EXCLUDED.line_manager_level_code,
+                dept                = EXCLUDED.dept,
+                user_coc_type       = EXCLUDED.user_coc_type,
+                bpo_coc_type        = EXCLUDED.bpo_coc_type,
+                update_time = CURRENT_TIMESTAMP,
+                update_by = 'SYNC_UAR'
+        )
+
+        UPDATE user_access_review u
+        SET delete_flag = true
+        WHERE u.cmdb_id = #{cmdbId}
+        AND u.delete_flag = false
+        AND NOT EXISTS  (
+            SELECT 1
+            FROM x
+            WHERE x.cmdb_id = u.cmdb_id
+                AND  x.user_it_code = u.it_code_of_user
+                AND  x.user_id = u.user_id
+                AND  x.system_role_id = u.system_role_id
+                AND  x.system_role = u.system_role
+        );
+    </update>
+
+    <update id="batchInitUarCycleUserAccessReview">
+        <foreach collection="list" item="item" separator=";" >
+            update user_access_review
+            set uar_id = #{item.id}
+            where cmdb_id = #{item.cmdbId}
+        </foreach>
+    </update>
+
+    <update id="batchUpdateUserInvalidReviewResult">
+        UPDATE user_access_review uar
+        SET
+            final_review_time = CURRENT_TIMESTAMP,
+            final_review_decision = 'remove',
+            final_review_result_reason = 'User ITCode is invalid'
+        WHERE uar.final_review_decision IS NULL
+            AND uar.cmdb_id IN (
+                <foreach collection="cmdbId" item="item" separator=",">
+                    #{item}
+                </foreach>
+            )
+            AND COALESCE(uar.line_manager_band_ed_flag, '') != '1'
+            AND NOT EXISTS (
+                SELECT 1
+                FROM ad_tb_upp_nature_2 lm
+                WHERE lm.user_name = uar.line_manager and lm.band_flag = '1'
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM ad_tb_upp_nature_2 upp
+                WHERE upp.user_name = uar.it_code_of_user
+            );
+    </update>
+
+    <!--  下面的逻辑暂定这样，因为逻辑不全 还不知道该怎么处理 等年末Review  -->
+    <update id="batchUpdateLmSVPAccessReviewResult">
+        UPDATE user_access_review uar
+        SET
+            line_manager_review_status = CASE
+                WHEN COALESCE(uar.line_manager_review_status, '') != '2' THEN '2'
+                ELSE uar.line_manager_review_status
+            END,
+            line_managers_review_decision = CASE
+                WHEN COALESCE(uar.line_manager_review_status, '') != '2' THEN '/'
+                ELSE uar.line_managers_review_decision
+            END,
+            line_manager_review_time = CASE
+                WHEN COALESCE(uar.line_manager_review_status, '') != '2' THEN CURRENT_TIMESTAMP
+                ELSE uar.line_manager_review_time
+            END,
+            final_review_time = CASE
+                WHEN COALESCE(uar.line_manager_review_status, '') != '2' THEN null
+                ELSE uar.final_review_time
+            END,
+            final_review_decision = CASE
+                WHEN uar.bpo_review_decision = 'remove' THEN 'remove'
+                ELSE '/'
+            END,
+            final_review_result_reason = CASE
+                WHEN uar.bpo_review_decision = 'remove' THEN 'BPO''s review result is "Remove"'
+                ELSE 'Line managers who are SVP or above are not included in this review cycle. Their review results will be consolidated and processed together after the annual review is completed.'
+            END
+        WHERE uar.final_review_decision IS NULL
+            AND (
+                COALESCE(uar.line_manager_band_ed_flag, '') = '1'
+                OR EXISTS (
+                    SELECT 1
+                    FROM ad_tb_upp_nature_2 lm
+                    WHERE lm.user_name = uar.line_manager and lm.band_flag = '1'
+                )
+            )
+            AND uar.cmdb_id IN (
+                <foreach collection="cmdbId" item="item" separator=",">
+                    #{item}
+                </foreach>
+            )
+    </update>
+
+    <update id="batchUpdateFinalReviewDecision">
+        UPDATE user_access_review uar
+        SET
+        final_review_time = CURRENT_TIMESTAMP,
+        final_review_decision = CASE
+            -- 双方都保留
+            WHEN line_managers_review_decision = 'keep' AND bpo_review_decision = 'keep' THEN 'keep'
+            -- 其余全部为移除
+            ELSE 'remove'
+        END,
+        final_review_result_reason = CASE
+            -- 双方都保留
+            WHEN line_managers_review_decision = 'keep' AND bpo_review_decision = 'keep' THEN 'Both Line Manager and BPO review results are "Keep"'
+            -- 双方都移除
+            WHEN line_managers_review_decision = 'remove' AND bpo_review_decision = 'remove' THEN 'Both Line Manager and BPO review results are "Remove"'
+            -- LM 移除（BPO 任意非移除）
+            WHEN line_managers_review_decision = 'remove' THEN 'Line Manager''s review result is "Remove"'
+            -- BPO 移除（LM 非移除）
+            WHEN bpo_review_decision = 'remove' THEN 'BPO''s review result is "Remove"'
+            -- 双方都未回复
+            WHEN line_manager_review_status = '1' AND bpo_review_status = '1' THEN 'Neither Line Manager nor BPO responded'
+            -- BPO 未回复（LM 任意回复）
+            WHEN bpo_review_status = '1' THEN 'BPO did not respond'
+            -- LM 未回复（BPO 任意回复）
+            WHEN line_manager_review_status = '1' THEN 'Line Manager did not respond'
+            ELSE 'Unknown Reason'
+        END
+        WHERE uar.final_review_decision is null
+        AND NOT EXISTS (
+            SELECT 1
+            FROM ad_tb_upp_nature_2 lm
+            WHERE lm.user_name = uar.line_manager and lm.band_flag = '1'
+        )
+        AND uar.cmdb_id in (
+            <foreach collection="cmdbId" item="item" separator=",">
+                #{item}
+            </foreach>
+        )
+    </update>
+
+    <delete id="truncateByCmdbId">
+        delete from user_access_review where cmdb_id = #{cmdbId}
+    </delete>
+
+    <update id="batchSave">
+        insert into user_access_review
+            (uar_id, cmdb_id, app_name, it_code_of_user, email, user_name, user_id,
+            system_role_id, system_role, role_description, leit_system_id,
+            line_manager, line_manager_email, bpo, bpo_email,
+            user_coc_type, bpo_coc_type,
+            delete_flag, sequence_number, uuid, create_time, create_by,
+            line_manager_band_ed_flag, dept, line_manager_level_code, access_label
+            )
+        values
+        <foreach item="item" collection="list" separator=",">
+            (#{item.uarId}, #{item.cmdbId}, #{item.appName}, #{item.itCodeOfUser}, #{item.email}, #{item.userName}, #{item.userId},
+            #{item.systemRoleId}, #{item.systemRole}, #{item.roleDescription}, #{item.leitSystemId},
+            #{item.lineManager}, #{item.lineManagerEmail}, #{item.bpo}, #{item.bpoEmail},
+            #{item.userCocType},
+            (
+                SELECT CASE
+                    WHEN COUNT(DISTINCT LOWER(TRIM(bpo_item))) = 1
+                        THEN MAX(
+                            CASE
+                                WHEN UPPER(TRIM(upp.coc_flag)) IN ('Y', 'N')
+                                    THEN UPPER(TRIM(upp.coc_flag))
+                                ELSE NULL
+                            END
+                        )
+                    ELSE NULL
+                END
+                FROM regexp_split_to_table(COALESCE(#{item.bpo}, ''), '[,;]') AS bpo_item
+                LEFT JOIN ad_tb_upp_nature_2 upp
+                    ON LOWER(upp.user_name) = LOWER(TRIM(bpo_item))
+                WHERE TRIM(bpo_item) != ''
+            ),
+            false, 'UAR' || TO_CHAR(CURRENT_DATE, 'YYYYMMDD') || LPAD(NEXTVAL('public.uar_sequence')::TEXT, 8, '0'),
+            #{item.uuid}, CURRENT_TIMESTAMP, #{operator},
+            #{item.lineManagerBandEdFlag}, #{item.dept}, #{item.lineManagerLevelCode}, #{item.accessLabel}
+            )
+        </foreach>
+        ON CONFLICT ON CONSTRAINT uq_uar_unique DO NOTHING
+    </update>
+
+    <!-- 发送通知_待发送_查询待发送的全部数据_清空领导要看的表 -->
+    <update id="truncateTempAllowSendTable">
+        TRUNCATE TABLE allow_send_email_include_lm_and_bpo
+    </update>
+
+    <!-- 批量插入 allowSendEmail 核心方法 将选择的允许发送的邮件插入到数据库给领导看🤮 -->
+    <insert id="batchInsert">
+        INSERT INTO allow_send_email_include_lm_and_bpo
+        (uuid, sequence_number, it_code_of_user, user_name, app_name, department,
+        uar_id, cmdb_id, line_manager, line_manager_email, line_manager_review_status,
+        line_manager_band_ed_flag, bpo, bpo_email, bpo_review_status, bpo_band_ed_flag,line_manager_level_code,cc_email)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+                #{item.uuid}, #{item.sequenceNumber}, #{item.itCodeOfUser}, #{item.userName}, #{item.appName}, #{item.department},
+                #{item.uarId}, #{item.cmdbId}, #{item.lineManager}, #{item.lineManagerEmail}, #{item.lineManagerReviewStatus},
+                #{item.lineManagerBandEdFlag}, #{item.bpo}, #{item.bpoEmail}, #{item.bpoReviewStatus}, #{item.bpoBandEdFlag},#{item.lineManagerLevelCode},
+                #{item.ccEmail,jdbcType=ARRAY}
+            )
+        </foreach>
+    </insert>
+
+    <insert id="batchInsertForLm">
+        INSERT INTO allow_send_email_for_lm
+        (uuid, sequence_number, it_code_of_user, user_name, app_name, department,
+        uar_id, cmdb_id, line_manager, line_manager_email, line_manager_review_status,
+        line_manager_band_ed_flag, line_manager_level_code,cc_email)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+            #{item.uuid}, #{item.sequenceNumber}, #{item.itCodeOfUser}, #{item.userName}, #{item.appName}, #{item.department},
+            #{item.uarId}, #{item.cmdbId}, #{item.lineManager}, #{item.lineManagerEmail}, #{item.lineManagerReviewStatus},
+            #{item.lineManagerBandEdFlag}, #{item.lineManagerLevelCode},
+            #{item.ccEmail,jdbcType=ARRAY}
+            )
+        </foreach>
+    </insert>
+
+    <insert id="batchInsertForLmFailed">
+        INSERT INTO allow_send_email_for_lm_failed
+        (uuid, sequence_number, it_code_of_user, user_name, app_name, department,
+        uar_id, cmdb_id, line_manager, line_manager_email, line_manager_review_status,
+        line_manager_band_ed_flag, line_manager_level_code,cc_email)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+            #{item.uuid}, #{item.sequenceNumber}, #{item.itCodeOfUser}, #{item.userName}, #{item.appName}, #{item.department},
+            #{item.uarId}, #{item.cmdbId}, #{item.lineManager}, #{item.lineManagerEmail}, #{item.lineManagerReviewStatus},
+            #{item.lineManagerBandEdFlag}, #{item.lineManagerLevelCode},
+            #{item.ccEmail,jdbcType=ARRAY}
+            )
+        </foreach>
+    </insert>
+
+    <insert id="batchInsertForBpo">
+        INSERT INTO allow_send_email_for_bpo
+        (uuid, sequence_number, it_code_of_user, user_name, app_name, department,
+        uar_id, cmdb_id,bpo, bpo_email, bpo_review_status, bpo_band_ed_flag, cc_email)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+            #{item.uuid}, #{item.sequenceNumber}, #{item.itCodeOfUser}, #{item.userName}, #{item.appName}, #{item.department},
+            #{item.uarId}, #{item.cmdbId}, #{item.bpo}, #{item.bpoEmail}, #{item.bpoReviewStatus}, #{item.bpoBandEdFlag},
+            #{item.ccEmail,jdbcType=ARRAY}
+            )
+        </foreach>
+    </insert>
+
+    <insert id="batchInsertForBpoFailed">
+        INSERT INTO allow_send_email_for_bpo_failed
+        (uuid, sequence_number, it_code_of_user, user_name, app_name, department,
+        uar_id, cmdb_id,bpo, bpo_email, bpo_review_status, bpo_band_ed_flag, cc_email)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+            #{item.uuid}, #{item.sequenceNumber}, #{item.itCodeOfUser}, #{item.userName}, #{item.appName}, #{item.department},
+            #{item.uarId}, #{item.cmdbId}, #{item.bpo}, #{item.bpoEmail}, #{item.bpoReviewStatus}, #{item.bpoBandEdFlag},
+            #{item.ccEmail,jdbcType=ARRAY}
+            )
+        </foreach>
+    </insert>
+
+
+    <!--待发送页面和发送失败页面的全选-查询全部lm和bpo数据-->
+    <select id="getAllNeeDToSendEmailFromUserAccessReviewNew" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT uart.* FROM user_access_review uart
+        LEFT JOIN its_application_data iad ON iad.cmdb_id = uart.cmdb_id
+        WHERE
+        uart.delete_flag = false
+        AND (COALESCE(uart.bpo_review_status, '') != '2' OR COALESCE(uart.line_manager_review_status, '') != '2')
+        AND (COALESCE(uart.bpo_band_ed_flag, '') != '1' OR COALESCE(uart.line_manager_band_ed_flag, '') != '1')
+        <!--AND uart.current_round &lt; 6 -->
+        <choose >
+            <when test='successFailedFlag == "1"'>
+                AND uart.overall_send_status = 'Pending'
+            </when>
+            <when test='successFailedFlag == "2"'>
+                AND uart.overall_send_status = 'Failed'
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND uart.it_code_of_user = #{bean.itCodeOfUser}
+        </if>
+        <if test="bean.lineManager != null and bean.lineManager != ''">
+            AND uart.line_manager = #{bean.lineManager}
+        </if>
+        <if test="bean.lineManagerLevelCode != null and bean.lineManagerLevelCode != ''">
+            AND uart.line_manager_level_code = #{bean.lineManagerLevelCode}
+        </if>
+        <if test="bean.dept != null and bean.dept != ''">
+            AND uart.dept like '%'||#{bean.dept}||'%'
+        </if>
+        <if test="bean.lineManagerReviewStatus != null and bean.lineManagerReviewStatus != ''">
+            AND uart.line_manager_review_status = #{bean.lineManagerReviewStatus}
+        </if>
+        <if test="bean.bpo != null and bean.bpo != ''">
+            AND uart.bpo = #{bean.bpo}
+        </if>
+        <if test="bean.bpoReviewStatus != null and bean.bpoReviewStatus != ''">
+            AND uart.bpo_review_status = #{bean.bpoReviewStatus}
+        </if>
+        <if test="bean.cmdbIdListOfChoose != null and bean.cmdbIdListOfChoose != ''">
+            AND uart.cmdb_id IN
+            <foreach collection="bean.cmdbIdListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <if test="bean.appNameListOfChoose != null and bean.appNameListOfChoose != ''">
+            AND iad.application_name IN
+            <foreach collection="bean.appNameListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND uart.cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+    <!--待发送页面和发送失败页面的全选-查询全部lm数据-->
+    <select id="getLmFromUserAccessReviewNew" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT uart.* FROM user_access_review uart
+        left join its_application_data iad on uart.cmdb_id = iad.cmdb_id
+        WHERE 1=1
+        AND uart.delete_flag = false
+        AND (COALESCE(uart.line_manager_band_ed_flag, '') != '1' AND COALESCE(uart.line_manager_review_status, '') != '2')
+        <!--AND uart.current_round &lt; 6 -->
+        <choose >
+            <when test='successFailedFlag == "1"'>
+                AND uart.overall_send_status = 'Pending'
+            </when>
+            <when test='successFailedFlag == "2"'>
+                AND uart.overall_send_status = 'Failed'
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND uart.it_code_of_user = #{bean.itCodeOfUser}
+        </if>
+        <if test="bean.lineManager != null and bean.lineManager != ''">
+            AND uart.line_manager = #{bean.lineManager}
+        </if>
+        <if test="bean.lineManagerLevelCode != null and bean.lineManagerLevelCode != ''">
+            AND uart.line_manager_level_code = #{bean.lineManagerLevelCode}
+        </if>
+        <if test="bean.dept != null and bean.dept != ''">
+            AND uart.dept like '%'||#{bean.dept}||'%'
+        </if>
+        <if test="bean.lineManagerReviewStatus != null and bean.lineManagerReviewStatus != ''">
+            AND uart.line_manager_review_status = #{bean.lineManagerReviewStatus}
+        </if>
+        <if test="bean.bpo != null and bean.bpo != ''">
+            AND uart.bpo = #{bean.bpo}
+        </if>
+        <if test="bean.bpoReviewStatus != null and bean.bpoReviewStatus != ''">
+            AND uart.bpo_review_status = #{bean.bpoReviewStatus}
+        </if>
+        <if test="bean.cmdbIdListOfChoose != null and bean.cmdbIdListOfChoose != ''">
+            AND uart.cmdb_id IN
+            <foreach collection="bean.cmdbIdListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <if test="bean.appNameListOfChoose != null and bean.appNameListOfChoose != ''">
+            AND iad.application_name IN
+            <foreach collection="bean.appNameListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND uart.cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+    <!--待发送页面和发送失败页面的全选-查询全部Bpo数据-->
+    <select id="getBpoFromUserAccessReviewNew" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT uart.* FROM user_access_review uart
+        JOIN its_application_data iad on uart.cmdb_id = iad.cmdb_id
+        WHERE 1=1
+        AND uart.delete_flag = false
+        AND (COALESCE(uart.bpo_review_status, '') != '2' AND COALESCE(uart.bpo_band_ed_flag, '') != '1')
+        <choose >
+            <when test='successFailedFlag == "1"'>
+                AND uart.overall_send_status = 'Pending'
+            </when>
+            <when test='successFailedFlag == "2"'>
+                AND uart.overall_send_status = 'Failed'
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+        <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+            AND uart.it_code_of_user = #{bean.itCodeOfUser}
+        </if>
+        <if test="bean.lineManager != null and bean.lineManager != ''">
+            AND uart.line_manager = #{bean.lineManager}
+        </if>
+        <if test="bean.lineManagerLevelCode != null and bean.lineManagerLevelCode != ''">
+            AND uart.line_manager_level_code = #{bean.lineManagerLevelCode}
+        </if>
+        <if test="bean.dept != null and bean.dept != ''">
+            AND uart.dept like '%'||#{bean.dept}||'%'
+        </if>
+        <if test="bean.lineManagerReviewStatus != null and bean.lineManagerReviewStatus != ''">
+            AND uart.line_manager_review_status = #{bean.lineManagerReviewStatus}
+        </if>
+        <if test="bean.bpo != null and bean.bpo != ''">
+            AND uart.bpo = #{bean.bpo}
+        </if>
+        <if test="bean.bpoReviewStatus != null and bean.bpoReviewStatus != ''">
+            AND uart.bpo_review_status = #{bean.bpoReviewStatus}
+        </if>
+        <if test="bean.cmdbIdListOfChoose != null and bean.cmdbIdListOfChoose != ''">
+            AND uart.cmdb_id IN
+            <foreach collection="bean.cmdbIdListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <if test="bean.appNameListOfChoose != null and bean.appNameListOfChoose != ''">
+            AND iad.application_name IN
+            <foreach collection="bean.appNameListOfChoose" item="type" open="(" separator="," close=")">
+                #{type}
+            </foreach>
+        </if>
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND uart.cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+    <!--待发送页面和发送失败页面的单选-查询全部lm和bpo数据-->
+    <select id="getAllNeeDToSendEmailFromUserAccessReviewBySequenceNumbers" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT *
+        FROM user_access_review
+        WHERE 1=1
+        AND sequence_number IN
+        <foreach collection="sequenceNumbers" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+
+    <select id="selectDelagateBpoByrandomSequence" resultType="com.lenovo.entity.UarMailSendLog">
+        SELECT DISTINCT ON(recipient_emails)recipient_emails,recipient_it_code
+        FROM uar_mail_send_log
+        WHERE 1=1
+        AND delegate = 'delegatee'
+        AND status = 'FAILED'
+        AND random_sequence IN
+        <foreach collection="sequenceNumbers" item="seq" open="(" separator="," close=")">
+            #{seq}
+        </foreach>
+    </select>
+
+    <select id="selectDistinctSystemRolesByCmdbId" resultType="java.lang.String">
+        SELECT DISTINCT system_role
+        FROM user_access_review
+        WHERE cmdb_id = #{cmdbId} AND bpo ~* '\y(${bpo})\y'
+    </select>
+
+    <!--查询final_review_decision最终审核是空的用户数据-->
+    <select id="getItCodeUserByFinalReviewDecisionIsEmpty" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT
+            uart.it_code_of_user,
+            MAX(uart.email) AS email,
+            MAX(uart.line_manager_level_code) AS line_manager_level_code
+        FROM user_access_review uart WHERE 1=1
+            AND uart.delete_flag = false
+            <!--AND (uart.final_review_decision IS NULL OR uart.final_review_decision = '')-->
+            AND (line_manager_review_status='1' OR bpo_review_status='1')
+            AND uart.email IS NOT NULL
+            AND uart.email != ''
+            AND uart.email != 'null'
+            <choose >
+                <when test='roleFlag == "2"'>
+                </when>
+                <when test='roleFlag == "3" and useAccessReviewBean.cmdbIdList != null and useAccessReviewBean.cmdbIdList.size() > 0'>
+                    AND uart.cmdb_id IN
+                    <foreach collection="useAccessReviewBean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                        #{seq}
+                    </foreach>
+                </when>
+                <otherwise>
+                    and 1=2
+                </otherwise>
+            </choose>
+        GROUP BY uart.it_code_of_user
+    </select>
+
+    <!--用户发邮件:查询lm或者bpo的审核结果是remove的用户数据-->
+    <select id="selectUserByReviewResultIsRemove" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT
+            LOWER(uart.it_code_of_user) AS it_code_of_user,
+            MAX(uart.email) AS email,
+            MAX(uart.line_manager_level_code) AS line_manager_level_code
+        FROM user_access_review uart WHERE 1=1
+            AND uart.delete_flag = false
+            AND (uart.line_managers_review_decision = 'remove' OR uart.bpo_review_decision = 'remove')
+            AND uart.email IS NOT NULL
+            AND uart.email != ''
+            AND uart.email != 'null'
+            <choose >
+                <when test='roleFlag == "2"'>
+                </when>
+                <when test='roleFlag == "3" and useAccessReviewBean.cmdbIdList != null and useAccessReviewBean.cmdbIdList.size() > 0'>
+                    AND uart.cmdb_id IN
+                    <foreach collection="useAccessReviewBean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                        #{seq}
+                    </foreach>
+                </when>
+                <otherwise>
+                    and 1=2
+                </otherwise>
+            </choose>
+        GROUP BY uart.it_code_of_user
+    </select>
+
+    <!--将lm或者bpo审核结果是remove的用户数据写入到表中-->
+    <insert id="batchInsertReviewRemoveUser">
+        INSERT INTO allow_send_email_for_result_remove_user(it_code_of_user_email)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item})
+        </foreach>
+    </insert>
+
+    <!--获取【最终审核是移除的用户】数据-->
+    <select id="getFinalRemoveUser" resultType="com.lenovo.entity.UserAccessReview">
+        SELECT
+        LOWER(uar.it_code_of_user) AS it_code_of_user,
+        LOWER(atun.email) AS email,
+        MAX(uar.line_manager_email) AS line_manager_email,
+        MAX(atun.management_level) AS line_manager_level,
+        CASE
+        WHEN atun.management_level = 'Executive Director' THEN 'ED'
+        ELSE 'Director and below'
+        END AS line_manager_level_code
+        FROM user_access_review uar
+        LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uar.it_code_of_user) = LOWER(atun.user_name)
+        WHERE 1=1
+        AND atun.email IS NOT NULL
+        AND atun.email != ''
+        AND atun.email != 'null'
+        AND atun.email != 'NULL'
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3" and useAccessReviewBean.cmdbIdList != null and useAccessReviewBean.cmdbIdList.size() > 0'>
+                AND uar.cmdb_id IN
+                <foreach collection="useAccessReviewBean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                AND 1=2
+            </otherwise>
+        </choose>
+        GROUP BY
+        LOWER(uar.it_code_of_user),
+        LOWER(atun.email),
+        CASE
+        WHEN atun.management_level = 'Executive Director' THEN 'ED'
+        ELSE 'Director and below'
+        END
+
+        <!--WITH user_data AS
+        (
+            SELECT
+                LOWER(uar.it_code_of_user) AS it_code_of_user,
+                LOWER(atun.email) AS email,
+                MAX(uar.line_manager_email) AS line_manager_email,
+                MAX(atun.management_level) AS line_manager_level,
+                CASE
+                    WHEN atun.management_level = 'Executive Director' THEN 'ED'
+                    ELSE 'Director and below'
+                END AS line_manager_level_code
+            FROM user_access_review uar
+            LEFT JOIN ad_tb_upp_nature_2 atun ON LOWER(uar.it_code_of_user) = LOWER(atun.user_name)
+            WHERE 1=1
+                AND atun.email IS NOT NULL
+                AND atun.email != ''
+                AND atun.email != 'null'
+                AND atun.email != 'NULL'
+                <choose >
+                    <when test='roleFlag == "2"'>
+                    </when>
+                    <when test='roleFlag == "3" and useAccessReviewBean.cmdbIdList != null and useAccessReviewBean.cmdbIdList.size() > 0'>
+                        AND uar.cmdb_id IN
+                        <foreach collection="useAccessReviewBean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                            #{seq}
+                        </foreach>
+                    </when>
+                    <otherwise>
+                        AND 1=2
+                    </otherwise>
+                </choose>
+            GROUP BY
+                LOWER(uar.it_code_of_user),
+                LOWER(atun.email),
+                CASE
+                    WHEN atun.management_level = 'Executive Director' THEN 'ED'
+                    ELSE 'Director and below'
+                END
+        )
+        SELECT
+            it_code_of_user,
+            email,
+            CASE
+                WHEN ROW_NUMBER() OVER (PARTITION BY line_manager_email ORDER BY it_code_of_user) = 1
+                THEN line_manager_email
+            END AS line_manager_email,
+            line_manager_level,
+            line_manager_level_code
+        FROM user_data
+        ORDER BY line_manager_email, it_code_of_user; -->
+
+    </select>
+
+
+    <!--查询用户表获取不是blow的用户（都是不能发邮件的高级用户）-->
+    <select id="getUserByBlow" resultType="java.lang.String">
+        SELECT user_name FROM ad_tb_upp_nature_2
+        WHERE management_level IN
+        (
+           'ED',
+           'Executive Director',
+           'VP',
+           'Vice President',
+           'SVP',
+           'Senior Vice President',
+           'EVP',
+           'Executive Vice President',
+           'CEO',
+           'Chief Executive Officer'
+        )
+    </select>
+
+    <!--用户发邮件,按照需求查询出【最终审核是移除的用户】的userIdLock是0的才可以发送-->
+    <select id="getUserEmailFromAllowSendEmailIncludeFinalRemove" resultType="com.lenovo.entity.AllowSendEmailIncludeFinalRemoveUser">
+        SELECT *
+        FROM allow_send_email_include_final_remove_user WHERE 1=1
+        AND send_flag IS NOT NULL
+        AND send_flag = #{useAccessReviewBean.userIdLock}
+        <if test="limitSize != null">
+            LIMIT #{limitSize}
+        </if>
+    </select>
+
+    <!--插入到用户邮件发送表给领导看-->
+    <insert id="batchInsertAllowUser">
+        INSERT INTO allow_send_email_include_user(it_code_of_user)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item})
+        </foreach>
+    </insert>
+
+    <!--将【最终审核是移除的用户】写入到表-->
+    <insert id="batchInsertAllowUserIncludeFinalRemove">
+        INSERT INTO allow_send_email_include_final_remove_user(it_code_of_user,it_code_of_user_email,management_level,level,ccs_line_manager,send_flag)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.itCodeOfUser}, #{item.email}, #{item.lineManagerLevel},#{item.lineManagerLevelCode}, #{item.lineManagerEmail},'0')
+        </foreach>
+    </insert>
+
+
+    <!--发送邮件统计各种发送状态的邮件数量-->
+    <select id="getSendEmailTotalCount" resultType="int">
+        SELECT COUNT(*) FROM user_access_review
+        where 1=1
+        and overall_send_status = #{overallSendStatus}
+        and delete_flag = false
+        and (COALESCE(bpo_review_status,'') != '2' OR COALESCE(line_manager_review_status,'') != '2')
+        and (COALESCE(bpo_band_ed_flag, '') != '1' OR COALESCE(line_manager_band_ed_flag, '') != '1')
+        <!--<choose>
+            <when test='overallSendStatus == "Sent"'>
+                and current_round &lt;= 6
+            </when>
+            <otherwise>
+                and current_round &lt; 6
+            </otherwise>
+        </choose>-->
+        <choose >
+            <when test='roleFlag == "2"'>
+            </when>
+            <when test='roleFlag == "3" and bean.cmdbIdList != null and bean.cmdbIdList.size() > 0'>
+                AND cmdb_id IN
+                <foreach collection="bean.cmdbIdList" item="seq" open="(" separator="," close=")">
+                    #{seq}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1=2
+            </otherwise>
+        </choose>
+    </select>
+
+    <update id="batchUpdate">
+        <foreach collection="records" item="item" separator=";">
+            UPDATE user_access_review
+            <set>
+                <if test="item.bpo != null ">
+                    bpo = #{item.bpo},
+                </if>
+                <if test="item.bpoEmail != null">
+                    bpo_email = #{item.bpoEmail},
+                </if>
+                <if test="item.bpo != null or item.bpoEmail != null">
+                    bpo_update_time = #{item.bpoUpdateTime},
+                    bpo_update_by = #{item.bpoUpdateBy},
+                </if>
+
+                <if test="item.bpoReviewDecision != null">
+                    bpo_review_status ='2',
+                    bpo_review_decision = #{item.bpoReviewDecision},
+                    bpo_review_itcode = #{item.bpoReviewItcode},
+                    bpo_review_time = #{item.bpoReviewTime},
+                </if>
+            </set>
+            <where>
+                id = #{item.id}
+            </where>
+        </foreach>
+    </update>
+
+
+    <select id="getDistinctUserGroup" resultType="com.lenovo.entity.UserAccessReview">
+        WITH target_users AS (
+            SELECT DISTINCT LOWER(TRIM(uar.it_code_of_user)) AS it_code_of_user
+            FROM user_access_review uar
+            INNER JOIN ad_tb_upp_nature_2 ad ON lower(uar.it_code_of_user) = lower(ad.user_name)
+            WHERE uar.delete_flag = false
+            <choose>
+                <when test="userItCode != null and userItCode != ''">
+                    AND LOWER(TRIM(uar.it_code_of_user)) = LOWER(TRIM(#{userItCode}))
+                </when>
+                <otherwise>
+                    AND uar.final_review_decision = 'remove'
+                    AND ad.band_flag = '0'
+                    AND ad.email IS NOT NULL
+                    AND ad.email != ''
+                </otherwise>
+            </choose>
+        )
+        SELECT
+            uar.cmdb_id,
+            iad.application_name as app_name,
+            LOWER(uar.it_code_of_user) AS it_code_of_user,
+            uar.system_role,
+            uar.role_description,
+            LOWER(uar.line_manager) AS line_manager,
+            CASE
+                WHEN uar.line_managers_review_decision = 'keep' THEN 'Keep'
+                WHEN uar.line_managers_review_decision = 'remove' THEN 'Remove'
+                WHEN uar.line_managers_review_decision = '/' THEN '/'
+                ELSE 'No Response'
+            END AS line_managers_review_decision,
+            uar.line_manager_review_time,
+            LOWER(uar.bpo) AS bpo,
+            CASE
+                WHEN uar.bpo_review_decision = 'keep' THEN 'Keep'
+                WHEN uar.bpo_review_decision = 'remove' THEN 'Remove'
+                WHEN uar.bpo_review_decision = '/' THEN '/'
+                ELSE 'No Response'
+            END AS bpo_review_decision,
+            uar.bpo_review_time,
+            CASE
+                WHEN uar.final_review_decision = 'keep' THEN 'Keep'
+                WHEN uar.final_review_decision = 'remove' THEN 'Remove'
+                ELSE uar.final_review_decision
+            END AS final_review_decision,
+            uar.final_review_result_reason,
+            uar.final_review_time
+        FROM user_access_review uar
+            INNER JOIN target_users tu ON LOWER(TRIM(uar.it_code_of_user)) = tu.it_code_of_user
+            LEFT JOIN its_application_data iad ON iad.cmdb_id = uar.cmdb_id
+        WHERE COALESCE(uar.delete_flag, false) = false
+        ORDER BY LOWER(uar.it_code_of_user), uar.cmdb_id, uar.system_role, uar.final_review_decision
+    </select>
+
+    <delete id="cleanFinalRemoveUserSendTable">
+        DELETE FROM allow_send_email_include_final_remove_user;
+    </delete>
+
+    <update id="relatedLeaderAndSave">
+        insert into allow_send_email_include_final_remove_user
+        (it_code_of_user,it_code_of_user_email,send_flag,ccs_line_manager,level)
+        (
+        SELECT
+            LOWER(TRIM(a.user_name)) AS it_code_lower,
+            a.email ,0 as send_flag ,
+            case when b.band_flag ='1' then null
+            else b.email end as lm_email, b.band_flag AS level
+        FROM ad_tb_upp_nature_2 a
+        left join ad_tb_upp_nature_2 b on a.manager1st = b.user_name
+        WHERE a.user_name IN
+            <foreach collection="employees" item="itcode" open="(" separator="," close=")">
+                #{itcode}
+            </foreach>
+        );
+
+    </update>
+
+    <select id="findFinalRemoveUser" resultType="java.lang.String">
+        SELECT
+            it_code_of_user
+        FROM
+            allow_send_email_include_final_remove_user
+    </select>
+
+    <select id="getCcEmailByLineManager" resultType="java.lang.String">
+        SELECT DISTINCT a.email
+        FROM ad_tb_upp_nature_2 a
+        JOIN user_access_review ur ON lower(a.user_name) = lower(ur.it_code_of_user)
+        WHERE ur.line_manager = #{lineManager}
+    </select>
+
+    <!--给Lm发邮件查询lineManager的cc邮件-->
+    <select id="getCcEmailByLineManagerNew" resultType="java.util.Map">
+        SELECT
+            lower(ur.line_manager) AS line_manager,
+            COALESCE(string_agg(DISTINCT a.email, ',') FILTER (WHERE a.email IS NOT NULL AND trim(a.email) &lt;&gt; '' AND lower(trim(a.email)) &lt;&gt; 'null'),'') AS email
+        FROM ad_tb_upp_nature_2 a
+        JOIN user_access_review ur ON lower(a.user_name) = lower(ur.it_code_of_user)
+        JOIN its_application_data iad on ur.cmdb_id = iad.cmdb_id
+        WHERE 1=1
+            AND ur.line_manager_review_status != '2'
+            AND ur.overall_send_status = 'Pending'
+            <if test="bean.itCodeOfUser != null and bean.itCodeOfUser != ''">
+                AND ur.it_code_of_user = #{bean.itCodeOfUser}
+            </if>
+            <if test="bean.lineManager != null and bean.lineManager != ''">
+                AND ur.line_manager = #{bean.lineManager}
+            </if>
+            <if test="bean.lineManagerLevelCode != null and bean.lineManagerLevelCode != ''">
+                AND ur.line_manager_level_code = #{bean.lineManagerLevelCode}
+            </if>
+            <if test="bean.dept != null and bean.dept != ''">
+                AND ur.dept like '%'||#{bean.dept}||'%'
+            </if>
+            <if test="bean.lineManagerReviewStatus != null and bean.lineManagerReviewStatus != ''">
+                AND ur.line_manager_review_status = #{bean.lineManagerReviewStatus}
+            </if>
+            <if test="bean.bpo != null and bean.bpo != ''">
+                AND ur.bpo = #{bean.bpo}
+            </if>
+            <if test="bean.bpoReviewStatus != null and bean.bpoReviewStatus != ''">
+                AND ur.bpo_review_status = #{bean.bpoReviewStatus}
+            </if>
+            <if test="bean.cmdbIdListOfChoose != null and bean.cmdbIdListOfChoose != ''">
+                AND ur.cmdb_id IN
+                <foreach collection="bean.cmdbIdListOfChoose" item="type" open="(" separator="," close=")">
+                    #{type}
+                </foreach>
+            </if>
+            <if test="bean.appNameListOfChoose != null and bean.appNameListOfChoose != ''">
+                AND iad.application_name IN
+                <foreach collection="bean.appNameListOfChoose" item="type" open="(" separator="," close=")">
+                    #{type}
+                </foreach>
+            </if>
+            AND lower(ur.line_manager) IN
+            <foreach collection="allowSendEmail" item="item" open="(" separator="," close=")">
+                #{item.lineManager}
+            </foreach>
+        GROUP BY ur.line_manager
+    </select>
+
+    <update id="updateDelagateBpoSequenceNum">
+        UPDATE uar_mail_send_log
+        SET status = 'SUCCESS', send_time = now()
+        where 1=1
+          and status='FAILED'
+          and delegate = 'delegatee'
+          and recipient_emails in
+          (
+              select distinct bpo_email from allow_send_email_for_bpo_failed where 1=1
+              and department='delegatee'
+              and sequence_number IN
+                <foreach collection="delegateBpoList" item="sequence" open="(" separator="," close=")">
+                    #{sequence}
+                </foreach>
+          )
+    </update>
+
+    <update id="batchUpdateExceptionProcess">
+        <foreach collection="list" item="item" separator=";" close=";">
+            UPDATE user_access_review
+            SET exception_ticket_no = #{item.exceptionTicketNo},
+                exception_result_decision = #{item.exceptionResultDecision},
+                exception_reason = #{item.exceptionReason},
+                exception_adjusted_by = #{operator},
+                exception_adjusted_time = CURRENT_TIMESTAMP
+            WHERE sequence_number = #{item.sequenceNumber}
+        </foreach>
+    </update>
+</mapper>

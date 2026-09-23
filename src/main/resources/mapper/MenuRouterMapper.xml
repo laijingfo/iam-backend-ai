@@ -1,0 +1,332 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.MenuRouterMapper">
+    <insert id="addMenuRouter" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO menu_router
+        (menu_key, menu_path, menu_url, parent_id, "level", "rank", "show", description, is_menu,
+         menu_type, open_type, "type", icon, name_en, name_cn, full_url)
+        VALUES (#{menuKey}, #{menuPath}, #{menuUrl}, #{parentId}, #{level}, #{rank}, true, #{description}, #{menuFlag},
+                #{menuType}, #{openType}, 'Custom', #{icon}, #{nameEn}, #{nameEn}, #{fullUrl});
+    </insert>
+    <update id="updateMenuRouter">
+        UPDATE menu_router
+        SET menu_key   = #{menuKey},
+            menu_path= #{menuPath},
+            menu_url= #{menuUrl},
+            parent_id= #{parentId},
+            "level"= #{level},
+            "rank"= #{rank},
+            "show"= #{show},
+            description= #{description},
+            is_menu= #{menuFlag},
+            menu_type= #{menuType},
+            open_type= #{openType},
+            icon= #{icon}
+
+        WHERE id = #{id};
+    </update>
+    <update id="updateMenuRouterShow">
+        UPDATE menu_router set show = (case show when true then false else true end)
+        <where>
+            <foreach collection="ids" item="id" open="id in(" separator="," close=")">
+                #{id}
+            </foreach>
+            <foreach collection="ids" item="id" open="or parent_id in(" separator="," close=")">
+                #{id}
+            </foreach>
+        </where>
+
+    </update>
+    <update id="menuRouterHead">
+        UPDATE menu_router
+        set "rank" = (select min("rank") from menu_router) - 1
+        where id = #{menuId}
+    </update>
+    <update id="menuRouterTail">
+        UPDATE menu_router
+        set "rank" = (select max("rank") from menu_router) + 1
+        where id = #{menuId}
+    </update>
+    <update id="updateMenuRouterSort">
+        <foreach collection="list" item="item" separator=";">
+            <trim suffixOverrides=",">
+                update menu_router
+                <set>
+                    rank=${item.rank},
+                    <if test="item.parentId != null and item.parentId != ''">
+                        parent_id=${item.parentId},
+                    </if>
+                    <if test="item.menuType != null and item.menuType != ''">
+                        menu_type=${item.menuType}
+                    </if>
+                </set>
+                where id = ${item.id}
+            </trim>
+        </foreach>
+
+    </update>
+    <delete id="delMenuRouter">
+        DELETE
+        FROM menu_router
+        WHERE id = #{id};
+    </delete>
+
+    <select id="findAll" resultType="com.lenovo.entity.MenuRouter">
+        select *, is_menu as menuFlag
+        from menu_router
+        order by id
+    </select>
+
+    <select id="findByUserRole" resultType="com.lenovo.entity.MenuRouter">
+        with recursive tmp as (select mr.id,
+                                      mr.menu_path as menuPath,
+                                      mr.parent_id as parentId,
+                                      mr.level,
+                                      mr.description,
+                                      mr.menu_key  as menuKey,
+                                      mr."rank",
+                                      mr.is_menu   as menuFlag,
+                                      mr.show,
+                                      mr.menu_url     menuUrl,
+                                      mr.menu_type    menuType,
+                                      mr.open_type    openType,
+                                      mr.type,
+                                      mr.icon,
+                                      mr.name_cn,
+                                      mr.name_en,
+                                      mr.full_url
+                               from menu_router mr,
+                                    sys_role_menu srm,
+                                    sys_role sr
+                               where mr.id = srm.menu_id
+                                 and mr."show" = true
+                                 and srm.checked = true
+                                 and srm.role_id = sr.id
+                                 and sr.name = #{roleName}
+                                 and sr.status = true
+                               union all
+                               select mr2.id,
+                                      mr2.menu_path as menuPath,
+                                      mr2.parent_id as parentId,
+                                      mr2.level,
+                                      mr2.description,
+                                      mr2.menu_key  as menuKey,
+                                      mr2."rank",
+                                      mr2.is_menu   as menuFlag,
+                                      mr2.show,
+                                      mr2.menu_url     menuUrl,
+                                      mr2.menu_type    menuType,
+                                      mr2.open_type    openType,
+                                      mr2.type,
+                                      mr2.icon,
+                                      mr2.name_cn,
+                                      mr2.name_en,
+                                      mr2.full_url
+                               from tmp,
+                                    menu_router mr2
+                               where mr2.id = tmp.parentId
+                                 and mr2.show = true)
+        select distinct tmp.*
+                      , coalesce((select srm.read_write
+                                  from sys_role_menu srm,
+                                       sys_role sr
+                                  where tmp.id = srm.menu_id
+                                    and srm.checked = true
+                                    and sr.name = #{roleName}
+                                    and sr.status = true
+                                    and srm.read_write = true
+                                  limit 1), false) as writeable
+        from tmp
+    </select>
+
+    <select id="findInIds" resultType="com.lenovo.entity.MenuRouter">
+        select *
+        from menu_router
+        <where>
+            <if test="ids != null">
+                id in
+                <foreach collection="ids" open="(" separator="," close=")" item="item">
+                    #{item}
+                </foreach>
+            </if>
+        </where>
+        order by id
+    </select>
+    <select id="findByUserId" resultType="com.lenovo.entity.MenuRouter">
+        with recursive tmp as (
+        select
+        mr.id,
+        mr.menu_path as menuPath,
+        mr.parent_id as parentId ,
+        mr.level,
+        mr.description,
+        mr.menu_key as menuKey,
+        mr."rank",
+        mr.is_menu as menuFlag,
+        mr.show,
+        mr.menu_url menuUrl,
+        mr.menu_type menuType,
+        mr.open_type openType,
+        mr.type,
+        mr.icon,
+        mr.name_cn,
+        mr.name_en,
+        mr.full_url
+        from
+        menu_router mr ,
+        sys_role_menu srm ,
+        sys_user_roles sur,
+        sys_role sr
+        where
+        mr.id = srm.menu_id
+        and mr."show" = true
+        and srm.checked = true
+        and sur.role_id = srm.role_id
+        and sr.id = sur.role_id
+        and sr.status = true
+        and sur.user_id = #{userId}
+        <if test="isMenu != null">
+            and mr.is_menu = #{isMenu}
+        </if>
+        union all
+        select
+        mr2.id ,
+        mr2.menu_path as menuPath,
+        mr2.parent_id as parentId ,
+        mr2.level,
+        mr2.description,
+        mr2.menu_key as menuKey,
+        mr2."rank",
+        mr2.is_menu as menuFlag,
+        mr2.show,
+        mr2.menu_url menuUrl,
+        mr2.menu_type menuType,
+        mr2.open_type openType,
+        mr2.type,
+        mr2.icon,
+        mr2.name_cn,
+        mr2.name_en,
+        mr2.full_url
+        from
+        tmp,
+        menu_router mr2
+        where
+        mr2.id = tmp.parentId and mr2.show = true
+        )
+        select distinct tmp.*
+        , coalesce((select srm.read_write from sys_role_menu srm ,
+        sys_user_roles sur,
+        sys_role sr
+        where tmp.id = srm.menu_id
+        and srm.checked = true
+        and sur.role_id = srm.role_id
+        and sr.id = sur.role_id
+        and sr.status = true
+        and srm.read_write = true
+        and sur.user_id = #{userId}
+        limit 1),false) as writeable
+        from tmp
+
+
+    </select>
+    <select id="getMenuRouterByHeadSort" resultType="com.lenovo.entity.MenuRouter">
+        <![CDATA[
+        select mr2.*
+        from menu_router mr
+           , menu_router mr2
+        where mr2."rank" <= mr."rank"
+          and mr2."rank" > #{sort}
+          and (mr2.parent_id = 0 or mr2.parent_id is null)
+          and mr.id = #{menuId}
+        order by mr2.rank
+        ]]>
+    </select>
+    <select id="getMenuRouterByTailSort" resultType="com.lenovo.entity.MenuRouter">
+         <![CDATA[
+        select mr2.*
+        from menu_router mr
+           , menu_router mr2
+        where mr2."rank" >= mr."rank"
+          and mr2."rank" < #{sort}
+          and (mr2.parent_id = 0 or mr2.parent_id is null)
+          and mr.id = #{menuId}
+        order by mr2.rank
+        ]]>
+
+    </select>
+    <select id="getMenuRank" resultType="java.lang.Integer">
+        select rank
+        from menu_router
+        where parent_id = #{menuParentId}
+        order by "rank" desc
+        limit 1
+
+    </select>
+    <select id="getOne" resultType="com.lenovo.entity.MenuRouter">
+        select *
+        from menu_router
+        where menu_key = #{menukey}
+    </select>
+    <select id="findByDefaultUser" resultType="com.lenovo.entity.MenuRouter">
+        with recursive tmp as (select mr.id,
+                                      mr.menu_path as menuPath,
+                                      mr.parent_id as parentId,
+                                      mr.level,
+                                      mr.description,
+                                      mr.menu_key  as menuKey,
+                                      mr."rank",
+                                      mr.is_menu   as menuFlag,
+                                      mr.show,
+                                      mr.menu_url     menuUrl,
+                                      mr.menu_type    menuType,
+                                      mr.open_type    openType,
+                                      mr.type,
+                                      mr.icon,
+                                      mr.name_cn,
+                                      mr.name_en,
+                                      mr.full_url
+                               from menu_router mr,
+                                    sys_role_menu srm,
+                                    sys_role sr
+                               where mr.id = srm.menu_id
+                                 and mr."show" = true
+                                 and srm.checked = true
+                                 and sr.id = srm.role_id
+                                 and sr.status = true
+                                 and sr.id = 74
+                               union all
+                               select mr2.id,
+                                      mr2.menu_path as menuPath,
+                                      mr2.parent_id as parentId,
+                                      mr2.level,
+                                      mr2.description,
+                                      mr2.menu_key  as menuKey,
+                                      mr2."rank",
+                                      mr2.is_menu   as menuFlag,
+                                      mr2.show,
+                                      mr2.menu_url     menuUrl,
+                                      mr2.menu_type    menuType,
+                                      mr2.open_type    openType,
+                                      mr2.type,
+                                      mr2.icon,
+                                      mr2.name_cn,
+                                      mr2.name_en,
+                                      mr2.full_url
+                               from tmp,
+                                    menu_router mr2
+                               where mr2.id = tmp.parentId
+                                 and mr2.show = true)
+        select distinct tmp.*
+                      , coalesce((select srm.read_write
+                                  from sys_role_menu srm,
+                                       sys_role sr
+                                  where tmp.id = srm.menu_id
+                                    and srm.checked = true
+                                    and sr.id = srm.role_id
+                                    and sr.id = 74
+                                    and sr.status = true
+                                    and srm.read_write = true
+                                  limit 1), false) as writeable
+        from tmp
+    </select>
+</mapper>

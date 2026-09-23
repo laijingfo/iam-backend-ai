@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lenovo.mapper.FormFileMapper">
+
+    <resultMap id="BaseResultMap" type="com.lenovo.entity.FormFile">
+            <id property="id" column="id" jdbcType="INTEGER"/>
+            <result property="fileId" column="file_id" jdbcType="INTEGER"/>
+            <result property="fileType" column="file_type" jdbcType="INTEGER"/>
+            <result property="url" column="url" jdbcType="VARCHAR"/>
+            <result property="expires" column="expires" jdbcType="INTEGER"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,file_id,file_type,
+        url,expires
+    </sql>
+</mapper>
