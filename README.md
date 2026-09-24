@@ -141,3 +141,6 @@ mvn spring-boot:run -Pdev
 
 - [Spring Boot 3 / Java 17 升级里程碑](docs/milestones/2026-08-24-spring-boot-3-java-17-upgrade.md)
 - [Selector Options API](docs/api/selector-options-api.md)
+
+sys_role_menu表说明
+checked为true表示角色有该菜单权限
