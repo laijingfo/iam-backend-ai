@@ -21,6 +21,7 @@ import java.time.Duration;
 @Configuration
 public class LangChain4jConfig {
 
+    //TODO 临时配置，后续需要根据实际情况调整 解决Lenovo IPV6IPV4拒绝云百炼问题
     //-Djdk.tls.rejectClientInitiatedRenegotiation=false -Djdk.tls.client.protocols=TLSv1.2 -Dhttps.protocols=TLSv1.2
     static {
         // 把 Conscrypt 插到最高优先级，让 SSLContext.getDefault() 返回 Conscrypt 实现
