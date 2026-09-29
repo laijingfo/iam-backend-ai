@@ -16,7 +16,8 @@
     <properties>
         <java.version>17</java.version>
         <tomcat.version>10.1.59</tomcat.version>
-        <opensaml.version>3.1.0</opensaml.version>
+        <opensaml.version>4.3.0</opensaml.version>
+<!--        <opensaml.version>3.1.0</opensaml.version>-->
         <guava.version>33.6.0-jre</guava.version>
         <jasypt.version>4.0.4</jasypt.version>
     </properties>
@@ -301,8 +302,19 @@
             <groupId>com.lenovo.saml</groupId>
             <artifactId>lenovo-samlsp</artifactId>
             <version>1.0.0</version>
+            <exclusions>
+                <!-- 排除 jar 里的旧 IDPMetaData，让本地版本生效 -->
+                <exclusion>
+                    <groupId>com.lenovo.adfs</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
-
+        <dependency>
+            <groupId>org.conscrypt</groupId>
+            <artifactId>conscrypt-openjdk-uber</artifactId>
+            <version>2.5.2</version>
+        </dependency>
         <!--aws s3-->
         <dependency>
             <groupId>com.amazonaws</groupId>
@@ -341,14 +353,20 @@
             <artifactId>langchain4j</artifactId>
             <version>1.19.0</version>
         </dependency>
+        <!-- langchain4j HTTP client implementation: JDK native HttpClient (JSSE).
+             langchain4j-open-ai pulls this module in as runtime only, so it must be declared here
+             for compile-time use. The two spring-boot-starters are intentionally NOT used:
+             no @AiService / RAG starter APIs are used, all beans are declared manually
+             in LangChain4jConfig, which also avoids duplicate beans and startup class scanning. -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-spring-boot-starter</artifactId>
-            <version>1.19.0-beta29</version>
+            <artifactId>langchain4j-http-client-jdk</artifactId>
+            <version>1.19.0</version>
         </dependency>
+        <!-- 新增：OkHttp HTTP 客户端，解决 JDK HttpClient 的 SSL 握手问题 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
+            <artifactId>langchain4j-http-client-okhttp</artifactId>
             <version>1.19.0-beta29</version>
         </dependency>
     </dependencies>
@@ -358,6 +376,14 @@
             <id>lenovo-xpaas-repo</id>
             <name>Lenovo XPaaS Repository</name>
             <url>https://maven.xpaas.lenovo.com/nexus/content/repositories/public/</url>
+        </repository>
+        <!-- 新增：Maven Central，用于拉取私有仓库没有的 artifact -->
+        <repository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <url>https://repo1.maven.org/maven2/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
         </repository>
     </repositories>
     <build>

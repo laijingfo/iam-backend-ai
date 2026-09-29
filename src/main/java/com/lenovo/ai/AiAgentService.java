@@ -6,7 +6,6 @@ import com.lenovo.ai.history.ChatHistoryStore;
 import com.lenovo.ai.lock.RedisLockHelper;
 import com.lenovo.ai.sse.AiChatSseEmitter;
 import com.lenovo.ai.tools.context.AiToolContext;
-import com.lenovo.util.I18nUtil;
 import com.lenovo.util.RedisUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -18,7 +17,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.RejectedExecutionException;
 
 @Slf4j
 @Service
@@ -31,8 +29,10 @@ public class AiAgentService {
     private final AiChatExecutor chatExecutor;
     private final AiAgentRunner runner;
 
-    /** memoryId -> 正在运行的 SSE，供 /chat/stop 使用 */
+    /** memoryId -> 当前正在运行的 SSE */
     private final Map<String, AiChatSseEmitter> runningEmitters = new ConcurrentHashMap<>();
+    /** memoryId -> 当前正在运行的 runId（仅用于日志） */
+    private final Map<String, String> runningRunIds = new ConcurrentHashMap<>();
 
     public AiAgentService(ChatHistoryStore history,
                           RedisLockHelper redisLockHelper,
@@ -48,93 +48,93 @@ public class AiAgentService {
         this.runner = runner;
     }
 
-    /** 锁在建立 SSE 前取得：同一用户/会话的消息必须按顺序进入记忆和 PG。 */
     public SseEmitter chat(ChatRequest request, String userId) {
         Locale locale = LocaleContextHolder.getLocale();
         String sessionId = request.sessionId();
         String memoryId = memoryId(sessionId, userId);
         String lockKey = "ai:chat:lock:" + memoryId;
         String token = UUID.randomUUID().toString();
-        acquire(lockKey, token);
+        String newRunId = UUID.randomUUID().toString();
+
+        AiChatSseEmitter emitter = new AiChatSseEmitter();
         try {
+            // ✅ 1. 新请求进来时，无条件把同一 memoryId 上的旧 emitter 干掉
+            AiChatSseEmitter oldEmitter = runningEmitters.put(memoryId, emitter);
+            if (oldEmitter != null && oldEmitter != emitter) {
+                try {
+                    oldEmitter.complete();
+                    log.info(">>> 新请求进来，强制停掉旧 emitter, memoryId={}, newRunId={}",
+                            memoryId, newRunId);
+                } catch (Exception e) {
+                    log.warn(">>> 强制 complete 旧 emitter 失败: {}", e.getMessage());
+                }
+            }
+            runningRunIds.put(memoryId, newRunId);
+
+            // ✅ 2. 强制清掉旧锁，再抢新锁
+            redisLockHelper.forceUnlock(lockKey);
+            boolean locked = redisLockHelper.tryLock(lockKey, token, 60_000);
+            if (!locked) {
+                log.warn(">>> 抢锁失败, memoryId={}", memoryId);
+                try {
+                    emitter.send(SseEmitter.event().name("error")
+                            .data(Map.of("message", "当前会话正在处理中，请稍后再试")));
+                } catch (Exception ignored) {}
+                emitter.complete();
+                return emitter;
+            }
+
             boolean newSession = !history.exists(sessionId);
             if (!newSession) history.assertOwner(sessionId, userId);
 
             AiToolContext context = AiToolContext.capture(userId, roles, redisUtils);
-
             long userMessageId = history.nextMessageId();
             long assistantMessageId = history.nextMessageId();
 
-            AiChatSseEmitter emitter = new AiChatSseEmitter();
-
-            // 注册到 runningEmitters
-            runningEmitters.put(memoryId, emitter);
             emitter.onCompletion(() -> {
-                runningEmitters.remove(memoryId);
-                log.info(">>> SSE completion, memoryId={}", memoryId);
+                runningEmitters.remove(memoryId, emitter);
+                runningRunIds.remove(memoryId, newRunId);
+                log.info(">>> SSE completion, memoryId={}, runId={}", memoryId, newRunId);
             });
-            emitter.onError(e -> {
-                runningEmitters.remove(memoryId);
-                log.warn(">>> SSE error, memoryId={}", memoryId, e);
-            });
-            // ★ 关键：超时处理，complete + 释放锁
             emitter.onTimeout(() -> {
-                runningEmitters.remove(memoryId);
-                log.warn(">>> SSE timeout, memoryId={}", memoryId);
-                try {
-                    emitter.complete();
-                } catch (Exception ignored) {
-                }
+                log.warn(">>> SSE timeout, memoryId={}, runId={}", memoryId, newRunId);
+                try { emitter.complete(); } catch (Exception ignored) {}
                 redisLockHelper.forceUnlock(lockKey);
             });
 
             chatExecutor.execute(() -> runner.run(request, context, userId, newSession,
                     sessionId, userMessageId, assistantMessageId,
-                    locale, memoryId, lockKey, token, emitter));
+                    locale, memoryId, lockKey, token, emitter, newRunId));
+
             return emitter;
-        } catch (RuntimeException error) {
-            release(lockKey, token);
-            if (error instanceof RejectedExecutionException)
-                throw new IllegalStateException(I18nUtil.get("ai.error.busy"), error);
-            throw error;
+
+        } catch (Exception e) {
+            log.error("chat() 入口异常", e);
+            try {
+                emitter.send(SseEmitter.event().name("error")
+                        .data(Map.of("message", "系统繁忙，请稍后再试")));
+            } catch (Exception ignored) {}
+            emitter.complete();
+            return emitter;
         }
     }
 
-    /** 停止指定会话正在运行的对话 */
+    /**
+     * ✅ 方案 B++++ 下，stop 直接忽略。
+     * 原因：前端切换问题时 stop 和 chat 是同时发的，后端无法区分
+     *       stop 是想停"上一个"还是"当前"。强制停当前会误伤新请求。
+     *       "停上一个"已经由新 chat 里的 oldEmitter.complete() 覆盖。
+     */
     public void stop(String sessionId, String userId) {
         if (sessionId == null || sessionId.isBlank() || userId == null) {
             return;
         }
         String memoryId = memoryId(sessionId, userId);
-
-        // 1. 中断流
-        AiChatSseEmitter emitter = runningEmitters.remove(memoryId);
-        if (emitter != null) {
-            try {
-                emitter.complete();
-                log.info(">>> stopped SSE, memoryId={}", memoryId);
-            } catch (Exception ignored) {
-            }
-        }
-
-        // 2. 强制释放锁
-        String lockKey = "ai:chat:lock:" + memoryId;
-        redisLockHelper.forceUnlock(lockKey);
-        log.info(">>> force unlock, lockKey={}", lockKey);
+        log.info(">>> stop 调用被忽略（由新 chat 自动停旧请求）, memoryId={}", memoryId);
+        // 不 forceUnlock，不动 emitter
     }
 
     private String memoryId(String sessionId, String userId) {
         return userId + ":" + sessionId;
-    }
-
-    private void acquire(String lockKey, String token) {
-        boolean locked = redisLockHelper.tryLock(lockKey, token, 60_000);
-        if (!locked) {
-            throw new IllegalStateException("当前会话正在处理中，请稍后再试");
-        }
-    }
-
-    private void release(String lockKey, String token) {
-        redisLockHelper.unlock(lockKey, token);
     }
 }

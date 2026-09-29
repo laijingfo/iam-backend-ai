@@ -25,9 +25,9 @@ public class KnowledgeRegistrar {
 
     private static final Integer DEFAULT_PROJECT_ID = 79;
     private static final String DEFAULT_IT_CODE = "laijf2";
-    private static final String DEFAULT_EMBEDDING = "bge-m3";
-    private static final String DEFAULT_INDEX_MODE = "keyword";
-    private static final Integer DEFAULT_TOP_K = 3;
+    private static final String DEFAULT_EMBEDDING = "Qwen3-Embedding-0.6B";
+    private static final String DEFAULT_INDEX_MODE = "vector";
+    private static final Integer DEFAULT_TOP_K = 10;
 
     public void register(String knowledgeId) {
         if (knowledgeId == null || knowledgeId.isBlank()) return;

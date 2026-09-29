@@ -11,6 +11,7 @@ import org.opensaml.saml.saml2.core.Attribute;
 import org.opensaml.saml.saml2.core.AttributeStatement;
 import org.opensaml.saml.saml2.core.Response;
 import org.opensaml.saml.saml2.core.StatusCode;
+import java.time.Instant;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -129,6 +130,7 @@ public final class SamlResponseParser {
         return response.getAssertions().get(0);
     }
 
+
     private static void validateAssertion(Assertion assertion) throws SAMLHandlerException {
         String expectedIssuer = IDPMetaData.getEntityId();
         String actualIssuer = assertion.getIssuer() == null ? null : assertion.getIssuer().getValue();
@@ -139,7 +141,9 @@ public final class SamlResponseParser {
         if (assertion.getConditions() == null || assertion.getConditions().getNotOnOrAfter() == null) {
             throw new SAMLHandlerException("SAML assertion expiration is missing");
         }
-        if (assertion.getConditions().getNotOnOrAfter().isBeforeNow()) {
+
+        // ✅ 4.3.0 写法：DateTime 有 isBeforeNow()
+        if (assertion.getConditions().getNotOnOrAfter().isBefore(Instant.now())) {
             throw new SAMLHandlerException("SAML assertion has expired");
         }
     }

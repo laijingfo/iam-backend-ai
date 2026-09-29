@@ -29,6 +29,7 @@ public class AiAgentController {
     @PostMapping(value = "/chat")
     public SseEmitter chat(@RequestBody ChatRequest request) {
         String userId = SecurityUtils.getCurrentUserId();
+        // ✅ 每次请求都会 new 一个 emitter，绝不缓存
         return aiAgentService.chat(request, userId);
     }
 
@@ -36,7 +37,6 @@ public class AiAgentController {
 
     @GetMapping("/policy")
     public ApiResponse<AiChatPolicyResponse> policy() {
-
         return ApiResponse.success(history.policyStatus(SecurityUtils.getCurrentUserId()));
     }
 
@@ -45,6 +45,7 @@ public class AiAgentController {
         history.acceptPolicy(SecurityUtils.getCurrentUserId());
         return ApiResponse.successMessage(I18nUtil.get("ai.success.policy"));
     }
+
     @Operation(summary = "停止对话")
     @PostMapping("/chat/stop")
     public Map<String, Object> stopChat(@RequestBody StopRequest request) {
@@ -52,9 +53,11 @@ public class AiAgentController {
         aiAgentService.stop(request.sessionId(), userId);
         return Map.of("success", true);
     }
+
     @GetMapping("/sessions")
     public ApiResponse<List<AiChatSessionResponse>> sessions() {
         return ApiResponse.success(history.sessions(SecurityUtils.getCurrentUserId()));
     }
+
     public record StopRequest(String sessionId) {}
 }

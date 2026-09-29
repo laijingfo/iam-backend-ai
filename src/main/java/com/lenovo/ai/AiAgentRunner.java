@@ -12,11 +12,18 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class AiAgentRunner {
+
+    private static final long HEARTBEAT_INTERVAL_SECONDS = 15L;
 
     private final KnowledgeAgentManager agentManager;
     private final ChatHistoryStore history;
@@ -33,29 +40,88 @@ public class AiAgentRunner {
                     String memoryId,
                     String lockKey,
                     String lockToken,
-                    AiChatSseEmitter emitter) {
+                    AiChatSseEmitter emitter,
+                    String runId) {
         StringBuilder full = new StringBuilder();
+
         AiToolContext.set(context);
+
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        AtomicBoolean released = new AtomicBoolean(false);
+
+        // ✅ 注册关闭回调：客户端一旦断开，立即置 cancelled
+        emitter.setOnCloseCallback(() -> {
+            if (cancelled.compareAndSet(false, true)) {
+                log.warn("[RUN] emitter closed by client, cancel stream. sessionId={}, runId={}",
+                        sessionId, runId);
+            }
+        });
+
+        // ✅ 心跳
+        ScheduledExecutorService heartbeatScheduler =
+                Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "sse-heartbeat-" + sessionId);
+                    t.setDaemon(true);
+                    return t;
+                });
+        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
+            if (cancelled.get() || emitter.isClosed()) {
+                cancelled.set(true);
+                return;
+            }
+            try {
+                emitter.send(SseEmitter.event().comment("hb"));
+            } catch (Exception ignored) {
+            }
+        }, HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
+
+        Runnable releaseOnce = () -> {
+            if (released.compareAndSet(false, true)) {
+                try { heartbeat.cancel(true); } catch (Exception ignored) {}
+                try { heartbeatScheduler.shutdownNow(); } catch (Exception ignored) {}
+                try { AiToolContext.clear(); } catch (Exception e) { log.warn("AiToolContext.clear failed", e); }
+                try { redisLockHelper.unlock(lockKey, lockToken); } catch (Exception e) { log.debug("redis unlock skipped: {}", e.getMessage()); }
+            }
+        };
+
+        emitter.onCompletion(() -> {
+            log.info("SSE onCompletion(runner), sessionId={}, runId={}", sessionId, runId);
+            releaseOnce.run();
+        });
+
         try {
             history.append(sessionId, userId, userMessageId,
                     "USER", request.message(), null);
 
             String knowledgeId = request.knowledgeId();
-            if (knowledgeId == null || knowledgeId.isBlank()) {
-                knowledgeId = extractKnowledgeId(request.message());
-                if (knowledgeId != null) {
-                    log.info(">>> 从消息里提取到 knowledgeId: {}", knowledgeId);
-                }
+
+            // ✅ 只接受 13 位数字作为 knowledgeId
+            if (knowledgeId != null && !knowledgeId.isBlank()
+                    && !knowledgeId.matches("\\d{13}")) {
+                log.warn("[RUN] 非法 knowledgeId={}，忽略并走自动路由", knowledgeId);
+                knowledgeId = null;
             }
 
-            String message = request.message();
+            String message = "当前登录用户：" + userId + "\n用户问题：" + request.message();
+
+            String effectiveMemoryId = memoryId;
             if (knowledgeId != null && !knowledgeId.isBlank()) {
                 agentManager.register(knowledgeId);
-                message = "当前知识库 ID：" + knowledgeId + "\n用户问题：" + request.message();
+                effectiveMemoryId = memoryId + ":" + knowledgeId;
+                message = "当前登录用户：" + userId
+                        + "\n当前知识库 ID：" + knowledgeId
+                        + "\n用户问题：" + request.message();
             }
+
+            // ✅ 提出来，给 lambda 用
+            final String finalEffectiveMemoryId = effectiveMemoryId;
+
             KnowledgeAssistant assistant = agentManager.getAssistant(knowledgeId);
 
-            assistant.chatStream(memoryId, message, userId)
+            log.info("[RUN] start stream, sessionId={}, knowledgeId={}, effectiveMemoryId={}, runId={}",
+                    sessionId, knowledgeId, finalEffectiveMemoryId, runId);
+
+            assistant.chatStream(finalEffectiveMemoryId, message)
                     .onRetrieved(contents -> {
                         if (log.isDebugEnabled()) {
                             log.debug("retrieved {} contents, sessionId={}",
@@ -63,30 +129,64 @@ public class AiAgentRunner {
                         }
                     })
                     .onPartialResponse(text -> {
-                        log.info(">>> onPartialResponse: [{}]", text);
+                        if (cancelled.get() || emitter.isClosed()) {
+                            cancelled.set(true);
+                            return;
+                        }
                         full.append(text);
-                        emitter.send(SseEmitter.event()
-                                .name("delta")
-                                .data(Map.of("text", text)));
+                        try {
+                            emitter.send(SseEmitter.event()
+                                    .name("delta")
+                                    .data(Map.of("text", text)));
+                        } catch (Exception e) {
+                            log.warn("emitter send delta failed: {}", e.getMessage());
+                            cancelled.set(true);
+                        }
                     })
                     .onCompleteResponse(response -> {
-                        log.info(">>> stream complete, sessionId={}, length={}",
-                                sessionId, full.length());
+                        log.info(">>> stream complete, sessionId={}, runId={}, cancelled={}, length={}",
+                                sessionId, runId, cancelled.get(), full.length());
+
+                        // ✅ 关键修复：cancelled=true 时清空 memory，避免空 assistant 消息污染
+                        if (cancelled.get()) {
+                            try {
+                                agentManager.clearMemory(finalEffectiveMemoryId);
+                                log.info(">>> cancelled=true，清空 memory, memoryId={}", finalEffectiveMemoryId);
+                            } catch (Exception e) {
+                                log.warn("clearMemory failed", e);
+                            }
+                            releaseOnce.run();
+                            return;
+                        }
+
                         try {
                             history.append(sessionId, userId, assistantMessageId,
                                     "ASSISTANT", full.toString(), null);
-                            // ★ 发 done 事件，通知前端结束
                             try {
                                 emitter.send(SseEmitter.event().name("done").data("{}"));
                             } catch (Exception ignored) {
                             }
                             emitter.complete();
                         } finally {
-                            releaseAll(lockKey, lockToken);
+                            releaseOnce.run();
                         }
                     })
                     .onError(error -> {
-                        log.error("chat stream error, sessionId={}", sessionId, error);
+                        log.error(">>> chat stream error, sessionId={}, runId={}, cancelled={}",
+                                sessionId, runId, cancelled.get(), error);
+
+                        // ✅ 出错时也清空 memory
+                        try {
+                            agentManager.clearMemory(finalEffectiveMemoryId);
+                            log.info(">>> onError，清空 memory, memoryId={}", finalEffectiveMemoryId);
+                        } catch (Exception e) {
+                            log.warn("clearMemory failed", e);
+                        }
+
+                        if (cancelled.get()) {
+                            releaseOnce.run();
+                            return;
+                        }
                         try {
                             emitter.send(SseEmitter.event()
                                     .name("error")
@@ -94,13 +194,26 @@ public class AiAgentRunner {
                                             error.getMessage() == null ? "未知错误" : error.getMessage())));
                         } catch (Exception ignored) {
                         }
-                        emitter.complete();
-                        releaseAll(lockKey, lockToken);
+                        try {
+                            emitter.complete();
+                        } catch (Exception ignored) {
+                        }
+                        releaseOnce.run();
                     })
                     .start();
 
+            log.info("[RUN] stream started, sessionId={}, runId={}", sessionId, runId);
+
         } catch (Exception e) {
-            log.error("run error, sessionId={}", sessionId, e);
+            log.error("run error, sessionId={}, runId={}", sessionId, runId, e);
+            cancelled.set(true);
+
+            // ✅ 入口异常也要清空 memory
+            try {
+                agentManager.clearMemory(memoryId);
+            } catch (Exception ignored) {
+            }
+
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
@@ -108,29 +221,11 @@ public class AiAgentRunner {
                                 e.getMessage() == null ? "未知错误" : e.getMessage())));
             } catch (Exception ignored) {
             }
-            emitter.complete();
-            releaseAll(lockKey, lockToken);
+            try {
+                emitter.complete();
+            } catch (Exception ignored) {
+            }
+            releaseOnce.run();
         }
-    }
-
-    /**
-     * 从用户消息里提取知识库 ID（连续数字串，通常 15 位以上）。
-     */
-    private static String extractKnowledgeId(String message) {
-        if (message == null || message.isBlank()) {
-            return null;
-        }
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("\\d{15,}")
-                .matcher(message);
-        if (m.find()) {
-            return m.group();
-        }
-        return null;
-    }
-
-    private void releaseAll(String lockKey, String lockToken) {
-        AiToolContext.clear();
-        redisLockHelper.unlock(lockKey, lockToken);
     }
 }
