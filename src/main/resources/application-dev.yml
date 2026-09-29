@@ -151,10 +151,6 @@ langchain4j:
 #    api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
     #非流式对话模型
     chat-model:
-#      api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
-#      base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-      base-url: https://ws-h0yse1g5h37z1f9s.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-      api-key: sk-ws-H.PIYYERR.1Nwn.MEUCIElKdWigzoNh0Q0oyc4diloh1kPaG985KNHutJFYZ_BcAiEAxSEiKGkUToaPuDQXxyTjjvFHlw-ijplt7phf64Nt6EM
       model-name: qwen3-max
 #      bean-name: openAiChatModel
 #      log-requests: true                   # 建议开启，方便调试

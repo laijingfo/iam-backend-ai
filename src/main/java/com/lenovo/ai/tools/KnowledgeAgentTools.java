@@ -26,8 +26,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class KnowledgeAgentTools {
 
-    private static final int MAX_RESULT_ITEMS = 3;
-    private static final int MAX_TEXT_LEN = 500;
+    private static final int MAX_RESULT_ITEMS = 5;
+    private static final int MAX_TEXT_LEN = 800;
 
     /** ✅ 知识库 ID 最小位数（实际 15 位，留 13 位兼容） */
     private static final int MIN_KB_ID_LENGTH = 15;
@@ -168,7 +168,7 @@ public class KnowledgeAgentTools {
         if (kb.getRelation() == null || kb.getRelation().isEmpty()) return "知识库 " + knowledgeId + " 缺少 relation，无法检索。";
         if (kb.getRelation().get(0).getEmbedding() == null) return "知识库 " + knowledgeId + " 缺少 embedding，无法检索。";
         if (kb.getIndexMode() == null) kb.setIndexMode("vector");
-        if (kb.getSimilarityTopK() == null) kb.setSimilarityTopK(5);
+        if (kb.getSimilarityTopK() == null) kb.setSimilarityTopK(10);
 
         JSONArray arr = knowledgeService.queryAnswer(kb);
         if (arr == null || arr.isEmpty()) return "知识库中未找到相关答案。";

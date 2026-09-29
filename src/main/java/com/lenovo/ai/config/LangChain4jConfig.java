@@ -16,6 +16,7 @@ import org.springframework.context.annotation.Configuration;
 import javax.net.ssl.SSLContext;
 import java.security.Security;
 import java.time.Duration;
+import java.util.Map;
 
 @Slf4j
 @Configuration
@@ -76,9 +77,10 @@ public class LangChain4jConfig {
         return OpenAiStreamingChatModel.builder()
                 .httpClientBuilder(newHttpClientBuilder())
                 .baseUrl(baseUrl).apiKey(apiKey).modelName(chatModelName)
-                .temperature(0.7)
+                .temperature(0.3)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
                 .logRequests(logRequests).logResponses(logResponses)
+                .customParameters(Map.of("enable_thinking", false))
                 .build();
     }
 
