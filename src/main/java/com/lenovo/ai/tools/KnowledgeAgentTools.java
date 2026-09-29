@@ -50,7 +50,7 @@ public class KnowledgeAgentTools {
         List<ProjectBase> result = knowledgeService.queryProject(base);
         if (result.isEmpty()) return "未查询到工作区。";
         return result.stream()
-                .map(p -> "- ID: " + p.getId() + ", 名称: " + p.getName())
+                .map(p -> "- " + p.getName() + " (内部ID: " + p.getId() + ")")
                 .collect(Collectors.joining("\n", "用户 " + effectiveUserId + " 下的工作区：\n", ""));
     }
 
@@ -144,9 +144,10 @@ public class KnowledgeAgentTools {
     private String queryOne(Long knowledgeBaseId, String question) {
         String knowledgeId = String.valueOf(knowledgeBaseId);
 
-        // ✅ 关键修复：改成 13 位及以上（原来写死 {13}，15 位 ID 会被误拦）
+        // ✅ 位数校验（内部日志用，不返回给 LLM）
         if (knowledgeId.length() < MIN_KB_ID_LENGTH || !knowledgeId.matches("\\d+")) {
-            return "知识库 ID 无效：" + knowledgeId + "（应为 " + MIN_KB_ID_LENGTH + " 位及以上数字）";
+            log.warn("[Tool] queryOne 非法知识库 ID: {}", knowledgeId);
+            return "无法定位知识库，请稍后再试。";
         }
 
         KnowledgeBase template = templateRegistry.get(knowledgeId);
@@ -156,22 +157,35 @@ public class KnowledgeAgentTools {
                 template = templateRegistry.get(knowledgeId);
             } catch (Exception e) {
                 log.warn("注册知识库失败: {}", knowledgeId, e);
-                return "无法加载知识库 " + knowledgeId + "：" + e.getMessage();
+                return "无法加载该知识库，请稍后再试。";
             }
         }
-        if (template == null) return "未找到知识库：" + knowledgeId;
+        if (template == null) {
+            return "未找到相关知识库。";
+        }
 
         KnowledgeBase kb = copyTemplate(template);
         kb.setQuery(question);
 
-        if (kb.getProjectId() == null) return "知识库 " + knowledgeId + " 缺少 projectId，无法检索。";
-        if (kb.getRelation() == null || kb.getRelation().isEmpty()) return "知识库 " + knowledgeId + " 缺少 relation，无法检索。";
-        if (kb.getRelation().get(0).getEmbedding() == null) return "知识库 " + knowledgeId + " 缺少 embedding，无法检索。";
+        if (kb.getProjectId() == null) {
+            log.warn("[Tool] queryOne kb={} 缺少 projectId", knowledgeId);
+            return "该知识库配置不完整，暂时无法检索。";
+        }
+        if (kb.getRelation() == null || kb.getRelation().isEmpty()) {
+            log.warn("[Tool] queryOne kb={} 缺少 relation", knowledgeId);
+            return "该知识库配置不完整，暂时无法检索。";
+        }
+        if (kb.getRelation().get(0).getEmbedding() == null) {
+            log.warn("[Tool] queryOne kb={} 缺少 embedding", knowledgeId);
+            return "该知识库配置不完整，暂时无法检索。";
+        }
         if (kb.getIndexMode() == null) kb.setIndexMode("vector");
         if (kb.getSimilarityTopK() == null) kb.setSimilarityTopK(5);
 
         JSONArray arr = knowledgeService.queryAnswer(kb);
-        if (arr == null || arr.isEmpty()) return "知识库中未找到相关答案。";
+        if (arr == null || arr.isEmpty()) {
+            return "知识库中未找到相关答案。";
+        }
 
         StringBuilder sb = new StringBuilder();
         int n = Math.min(arr.size(), MAX_RESULT_ITEMS);
@@ -185,8 +199,11 @@ public class KnowledgeAgentTools {
         }
         if (sb.length() == 0) return "知识库中未找到相关答案。";
 
+        // ✅ 日志保留 ID，方便排查
         log.info("[Tool] queryOne kb={} 返回 {} 条, 总长 {}", knowledgeId, n, sb.length());
-        return "知识库 " + knowledgeId + " 的检索结果：\n" + sb;
+
+        // ✅ 返回给 LLM 的内容不带任何 ID
+        return "以下是与问题相关的内容：\n" + sb;
     }
 
     private String currentUserId() {
