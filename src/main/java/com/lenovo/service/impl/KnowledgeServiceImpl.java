@@ -9,7 +9,7 @@ import com.lenovo.bean.knowledge.Chunks;
 import com.lenovo.bean.knowledge.KnowledgeBase;
 import com.lenovo.bean.knowledge.KnowledgeUpload;
 import com.lenovo.bean.knowledge.ProjectBase;
-import com.lenovo.ai.KnowledgeService;
+import com.lenovo.ai.service.KnowledgeService;
 import com.lenovo.util.ApiHubUtils;
 import com.lenovo.util.HttpUtilsSkpSsl;
 import lombok.extern.slf4j.Slf4j;

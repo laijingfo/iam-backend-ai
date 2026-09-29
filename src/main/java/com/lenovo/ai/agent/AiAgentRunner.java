@@ -1,9 +1,11 @@
-package com.lenovo.ai;
+package com.lenovo.ai.agent;
 
+import com.lenovo.ai.knowledge.KnowledgeAssistant;
+import com.lenovo.ai.agent.manager.KnowledgeAgentManager;
 import com.lenovo.controller.ai.AiAgentController.ChatRequest;
-import com.lenovo.ai.history.ChatHistoryStore;
-import com.lenovo.ai.lock.RedisLockHelper;
-import com.lenovo.ai.sse.AiChatSseEmitter;
+import com.lenovo.ai.infra.history.ChatHistoryStore;
+import com.lenovo.ai.infra.lock.RedisLockHelper;
+import com.lenovo.ai.infra.sse.AiChatSseEmitter;
 import com.lenovo.ai.tools.context.AiToolContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

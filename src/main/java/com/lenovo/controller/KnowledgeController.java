@@ -3,7 +3,7 @@ package com.lenovo.controller;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.lenovo.bean.knowledge.*;
-import com.lenovo.ai.KnowledgeService;
+import com.lenovo.ai.service.KnowledgeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;

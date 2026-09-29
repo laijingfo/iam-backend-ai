@@ -1,11 +1,11 @@
-package com.lenovo.ai.tools;
+package com.lenovo.ai.knowledge.tools;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
-import com.lenovo.ai.KnowledgeRegistrar;
-import com.lenovo.ai.KnowledgeService;
-import com.lenovo.ai.KnowledgeTemplateRegistry;
-import com.lenovo.ai.router.KnowledgeRouter;
+import com.lenovo.ai.knowledge.KnowledgeRegistrar;
+import com.lenovo.ai.service.KnowledgeService;
+import com.lenovo.ai.knowledge.KnowledgeTemplateRegistry;
+import com.lenovo.ai.agent.router.KnowledgeRouter;
 import com.lenovo.ai.tools.context.AiToolContext;
 import com.lenovo.bean.knowledge.Chunks;
 import com.lenovo.bean.knowledge.KnowledgeBase;

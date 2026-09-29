@@ -1,4 +1,4 @@
-package com.lenovo.ai;
+package com.lenovo.ai.service;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;

@@ -1,4 +1,4 @@
-package com.lenovo.ai.lock;
+package com.lenovo.ai.infra.lock;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;

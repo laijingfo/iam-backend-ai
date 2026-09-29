@@ -1,8 +1,12 @@
-package com.lenovo.ai;
+package com.lenovo.ai.agent.manager;
 
+import com.lenovo.ai.retriever.kmverse.KmverseRetrieverFactory;
+import com.lenovo.ai.knowledge.KnowledgeAssistant;
+import com.lenovo.ai.knowledge.KnowledgeRegistrar;
+import com.lenovo.ai.knowledge.KnowledgeTemplateRegistry;
 import com.lenovo.ai.tools.DateTools;
 import com.lenovo.bean.knowledge.KnowledgeBase;
-import com.lenovo.ai.tools.KnowledgeAgentTools;
+import com.lenovo.ai.knowledge.tools.KnowledgeAgentTools;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;

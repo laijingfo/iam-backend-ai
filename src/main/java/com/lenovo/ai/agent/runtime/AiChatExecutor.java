@@ -1,4 +1,4 @@
-package com.lenovo.ai.runtime;
+package com.lenovo.ai.agent.runtime;
 
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;

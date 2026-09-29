@@ -1,4 +1,4 @@
-package com.lenovo.ai.sse;
+package com.lenovo.ai.infra.sse;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;

@@ -1,5 +1,6 @@
-package com.lenovo.ai;
+package com.lenovo.ai.knowledge;
 
+import com.lenovo.ai.service.KnowledgeService;
 import com.lenovo.bean.knowledge.KnowledgeBase;
 import com.lenovo.bean.knowledge.KnowledgeRelation;
 import com.lenovo.bean.knowledge.ProjectBase;

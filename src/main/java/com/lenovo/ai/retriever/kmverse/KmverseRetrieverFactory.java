@@ -1,5 +1,6 @@
-package com.lenovo.ai;
+package com.lenovo.ai.retriever.kmverse;
 
+import com.lenovo.ai.service.KnowledgeService;
 import com.lenovo.bean.knowledge.KnowledgeBase;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import org.springframework.stereotype.Component;

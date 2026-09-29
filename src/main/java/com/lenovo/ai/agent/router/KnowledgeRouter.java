@@ -1,8 +1,8 @@
-package com.lenovo.ai.router;
+package com.lenovo.ai.agent.router;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
-import com.lenovo.ai.KnowledgeService;
+import com.lenovo.ai.service.KnowledgeService;
 import com.lenovo.bean.knowledge.ProjectBase;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import jakarta.annotation.PostConstruct;

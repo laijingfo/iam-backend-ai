@@ -1,17 +1,18 @@
-package com.lenovo.ai;
+package com.lenovo.ai.service;
 
+import com.lenovo.ai.agent.AiAgentRunner;
 import com.lenovo.controller.ai.AiAgentController.ChatRequest;
 import com.lenovo.security.utils.RoleUtils;
-import com.lenovo.ai.history.ChatHistoryStore;
-import com.lenovo.ai.lock.RedisLockHelper;
-import com.lenovo.ai.sse.AiChatSseEmitter;
+import com.lenovo.ai.infra.history.ChatHistoryStore;
+import com.lenovo.ai.infra.lock.RedisLockHelper;
+import com.lenovo.ai.infra.sse.AiChatSseEmitter;
 import com.lenovo.ai.tools.context.AiToolContext;
 import com.lenovo.util.RedisUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import com.lenovo.ai.runtime.AiChatExecutor;
+import com.lenovo.ai.agent.runtime.AiChatExecutor;
 
 import java.util.Locale;
 import java.util.Map;

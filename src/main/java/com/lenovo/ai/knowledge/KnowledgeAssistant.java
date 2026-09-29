@@ -1,4 +1,4 @@
-package com.lenovo.ai;
+package com.lenovo.ai.knowledge;
 
 import dev.langchain4j.service.MemoryId;
 import dev.langchain4j.service.SystemMessage;

@@ -7,7 +7,7 @@ import com.lenovo.bean.apihub.ApiHubTokenBean;
 import com.lenovo.bean.knowledge.KnowledgeBase;
 import com.lenovo.bean.knowledge.KnowledgeRelation;
 import com.lenovo.service.ItsApplicationAccessDataService;
-import com.lenovo.ai.KnowledgeService;
+import com.lenovo.ai.service.KnowledgeService;
 import com.lenovo.service.SyncItsApplicationService;
 import com.lenovo.util.ApiHubUtils;
 import com.lenovo.util.HttpUtilsSkpSsl;

@@ -1,10 +1,10 @@
 package com.lenovo.controller.ai;
 
-import com.lenovo.ai.history.ChatHistoryStore;
+import com.lenovo.ai.infra.history.ChatHistoryStore;
 import com.lenovo.dto.AiChatPolicyResponse;
 import com.lenovo.dto.AiChatSessionResponse;
 import com.lenovo.security.utils.SecurityUtils;
-import com.lenovo.ai.AiAgentService;
+import com.lenovo.ai.service.AiAgentService;
 import com.lenovo.util.I18nUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;

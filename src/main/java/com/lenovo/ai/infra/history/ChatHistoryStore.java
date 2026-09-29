@@ -1,4 +1,4 @@
-package com.lenovo.ai.history;
+package com.lenovo.ai.infra.history;
 
 import com.lenovo.dto.AiChatPolicyResponse;
 import com.lenovo.dto.AiChatSessionResponse;

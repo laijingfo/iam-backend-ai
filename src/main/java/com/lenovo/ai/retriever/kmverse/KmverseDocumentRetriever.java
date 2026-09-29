@@ -1,7 +1,8 @@
-package com.lenovo.ai;
+package com.lenovo.ai.retriever.kmverse;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.lenovo.ai.service.KnowledgeService;
 import com.lenovo.bean.knowledge.KnowledgeBase;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;

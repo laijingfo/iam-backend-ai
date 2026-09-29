@@ -1,4 +1,4 @@
-package com.lenovo.ai;
+package com.lenovo.ai.knowledge;
 
 import com.lenovo.bean.knowledge.KnowledgeBase;
 import org.springframework.stereotype.Component;
