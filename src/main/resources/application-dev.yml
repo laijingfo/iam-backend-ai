@@ -24,11 +24,11 @@ spring:
     type: com.alibaba.druid.pool.DruidDataSource
 
   data.redis:
-    host: 10.196.156.55
+    host: 127.0.0.1
     port: 6379
     database: ${REDIS_DATABASE:0}
     timeout: 3000
-    password: 0VaVDHyUOQv^
+    password:
     lettuce:
       pool:
         max-active: 50  # 必须增大连接池
@@ -49,16 +49,16 @@ mybatis-plus:
 
 splunk:
   address: https://itsi.lenovo.com:8089
-  authorization: eyJraWQiOiJzcGx1bmsuc2VjcmV0IiwiYWxnIjoiSFM1MTIiLCJ2ZXIiOiJ2MiIsInR0eXAiOiJzdGF0aWMifQ.eyJpc3MiOiJzaGFuZ25hbjFAbGVub3ZvLmNvbSBmcm9tIHNsdHZvazlybXZxLm5vdmFsb2NhbCIsInN1YiI6InN5c19jeWJlcnRyb25fYWlvcHMiLCJhdWQiOiJDeWJlcnRyb24gQUlPcHMgQXBpIENhbGwiLCJpZHAiOiJTcGx1bmsiLCJqdGkiOiJhMjM2ZmQzZDMyOTg4MTFlMTY3MWYyOWVlMzBhZDUwM2Q4Y2FkYjZlYTI0M2IxNWYxZjI1NDZhYjk3YjRiNjg5IiwiaWF0IjoxNjY0MjYxNzE3LCJleHAiOjMyNTAzNjUxMTQwLCJuYnIiOjE2NjQyNjE3MTd9.ntQL1D7JR1VBJXgs1odgbhUJLKmVzl46m0gLxuEXdMzDBK2rstyKaOILRoFIKsrShobHgPyfmCm_l5su-IvQKw
-  opex_token: eyJraWQiOiJzcGx1bmsuc2VjcmV0IiwiYWxnIjoiSFM1MTIiLCJ2ZXIiOiJ2MiIsInR0eXAiOiJzdGF0aWMifQ.eyJpc3MiOiJkb3VyczFAbGVub3ZvLmNvbSBmcm9tIHNscGU5dnJzaWR2Iiwic3ViIjoic3lzX2l0c2NfYmFja2VuZCIsImF1ZCI6IlRva2VuIGZvciBJVFNDIGRhdGEgdHJhbnNmZXIiLCJpZHAiOiJTcGx1bmsiLCJqdGkiOiIxOTkyZmFkMmY2OGRhNzU3MDcyOWM3M2Q5OTE4MTRmYzhjMzlhNjRlZTUwMTIzNDA1NWMyZTI2Yzc5ODRjMDU3IiwiaWF0IjoxNjkwNjI4OTE2LCJleHAiOjQwODkwMjM5NDAsIm5iciI6MTY5MDYyODkxNn0.xWJa3WUT4zOyucReszy6KUi5Gdqt_qBLUbjnMFmR1slysYCWNocIj5brYntI02FsFobrzXerNR4s1ibO6PZNcA
+  authorization:
+  opex_token:
 
 #ApiHub
 api-hub:
   domain: https://apihub-test.lenovo.com
   username: api_uar_user
-  password: ^SZX$gZ8Fc
+  password:
   # API-KEY：有效期180天
-  x-api-key: i67QVONLvWlhAy0tJX9egsDl32MNWMGk
+  x-api-key:
   km-verse-public-path: /uat/v2/product/tpass/tpass/kmverse/outerapi/v1
   x-project-id: 79
   x-user-token: I4VdfsNbTs8Z-Q1LHdjFaZctkznaUUn0a67b2biy5UQ
@@ -67,7 +67,7 @@ jwt:
   # 令牌前缀
   token-start-with: Token
   # 必须使用最少88位的Base64对该令牌进行编码
-  base64-secret: ZmQ0ZGI5NjQ0MDQwY2I4MjMxY2Y3ZmI3MjdhN2ZmMjNhODViOTg1ZGE0NTBjMGM4NDA5NzYxMjdjOWMwYWRmZTBlZjlhNGY3ZTg4Y2U3YTE1ODVkZDU5Y2Y3OGYwZWE1NzUzNWQ2YjFjZDc0NGMxZWU2MmQ3MjY1NzJmNTE0MzI=
+  base64-secret:
   # 登录会话初始有效期：1小时（配置单位毫秒，保存到 Redis 时转换为秒）
   token-validity-in-seconds: 3600000
   # 在线用户key
@@ -101,8 +101,8 @@ login:
 
 #密码加密传输，前端公钥加密，后端私钥解密
 rsa:
-  private_key: MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAMokFmsOauAdaUcRDnlXgTuVZh3aETeEQIiywG88LjCbrhcAunZDLPQ3JXsQs843JMxlLIBSt88GbfNjkZwIAkkbvdtpTQoslF8M2cwnl+gBthIz60NYqeEaogTHvqytOP1MJe4JL5JXyQGwIqLHdTXHjltwLQLikg90S/alho39AgMBAAECgYBT+ngh0+SM5UsmjiyANt1mvqOlBUKf2N7iq7iMvejGovbJcbEFjtTvRLXakc7RflFYZTP+v97DMH2fXx9QPneL4LgSmk3HRg6Q1XC+KxlfOLamngmhmQaDRekhuUsW7+25pTkY6fo/FhcyBD1sc+VwXfIbunWgPGI/yzgbR/pgoQJBAO4EmJukeSymaXs11jq4QUaxrZy2AW2VwGz9P5hRp7mziNZYkpyBb2R77DbecOzNA3hg6WY88xUjZy2bffF8xmUCQQDZaZwkR4vzwUBwvs7qhJhaeWTIGS0FGBe5I5WTpeuyNxb0FrHeqhVev9u9Gc1UaP2rvW/3Bq/U7kstof8XaAO5AkAQ2957V8EFepwKEBwmeJqXCUrEyNd9DZhdn+p7PX1l1+OfWxK3ZyuesHBgyoyxGSxfwG2HwlVtb96FCnh3PGFJAkBtn5+4d07tAHNSphNFEsiTTgRwFKmrmONVWcjw4sd+W+K5/rt/D3mpBcpxhhIPTsUhlGphP0Dnd6P2hWlPTwYZAkAwPtAm1s+gpBq6OT5VdO92gz+RV0C1NjJi6gegtiBD2TSItVMZ4t53IcDK0uPpArGFyYSsnotYY4XeZP3yEAel
-  public_key: MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDKJBZrDmrgHWlHEQ55V4E7lWYd2hE3hECIssBvPC4wm64XALp2Qyz0NyV7ELPONyTMZSyAUrfPBm3zY5GcCAJJG73baU0KLJRfDNnMJ5foAbYSM+tDWKnhGqIEx76srTj9TCXuCS+SV8kBsCKix3U1x45bcC0C4pIPdEv2pYaN/QIDAQAB
+  private_key:
+  public_key:
 
 location: cn
 
@@ -137,7 +137,7 @@ async:
 api-hub-na:
   domain: https://apihub-na.lenovo.com
   username: api_uarna_user
-  password: Mu(%kMWg&g
+  password:
   # API-KEY：有效期180天
   x-api-key: xGfWWYTMttoekah4qWWt3vORWm0mvyGr
   secAuthorization: eyJraWQiOiJzcGx1bmsuc2VjcmV0IiwiYWxnIjoiSFM1MTIiLCJ2ZXIiOiJ2MiIsInR0eXAiOiJzdGF0aWMifQ.eyJpc3MiOiJqcGVybkBsZW5vdm8uY29tIGZyb20gcmxwendxaGl4MHkubW90LmNvbSIsInN1YiI6InVhcl9uYSIsImF1ZCI6InVhcl9uYSBhY2Nlc3MgdWFyIHJlbGF0ZWQgZGF0YSIsImlkcCI6IlNwbHVuayIsImp0aSI6IjY5MzA0Y2Y4MTlkZjdlZDIzMDA4MjkyOWFkMGQ3YmQ3NDg2YjRiMDM3YjQzYjhiNTExYTAyNTE3NGQ5M2JiMjkiLCJpYXQiOjE3ODcyMTY3NDcsImV4cCI6MjcwMjM5MDM3NSwibmJyIjoxNzg3MjE2NzQ3fQ.zhyWNW59BxPWb4wjccRdzK2q8iC4yg2n58O_u550YDw2CbSiMNCpN6-g0oBBPHsoYL_ONGIKUoaTPi3Tb5rdeA
