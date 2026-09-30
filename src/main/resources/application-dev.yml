@@ -24,11 +24,11 @@ spring:
     type: com.alibaba.druid.pool.DruidDataSource
 
   data.redis:
-    host: 10.196.156.55
+    host: 127.0.0.1
     port: 6379
     database: ${REDIS_DATABASE:0}
     timeout: 3000
-    password: 0VaVDHyUOQv^
+    password:
     lettuce:
       pool:
         max-active: 50  # 必须增大连接池
