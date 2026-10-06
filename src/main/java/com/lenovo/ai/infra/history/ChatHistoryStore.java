@@ -1,5 +1,6 @@
 package com.lenovo.ai.infra.history;
 
+import com.lenovo.ai.llm.Message;
 import com.lenovo.dto.AiChatPolicyResponse;
 import com.lenovo.dto.AiChatSessionResponse;
 
@@ -21,4 +22,12 @@ public interface ChatHistoryStore {
     void acceptPolicy(String currentUserId);
 
     List<AiChatSessionResponse> sessions(String currentUserId);
+
+    String loadAssistant(long assistantMessageId);
+
+    List<Message> load(String sessionId);
+
+    void appendUser(long userMessageId, String sessionId, String userId, String message);
+
+    void appendAssistant(long l, String content);
 }

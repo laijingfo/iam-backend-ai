@@ -369,6 +369,12 @@
             <artifactId>langchain4j-http-client-okhttp</artifactId>
             <version>1.19.0-beta29</version>
         </dependency>
+        <!-- 新增 / 确认存在 -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>4.12.0</version>
+        </dependency>
     </dependencies>
 
     <repositories>
