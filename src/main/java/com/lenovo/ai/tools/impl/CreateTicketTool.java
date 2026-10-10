@@ -36,14 +36,18 @@ public class CreateTicketTool implements AiTool {
                 "properties", Map.of(
                         "title", Map.of("type", "string", "description", "工单标题"),
                         "content", Map.of("type", "string", "description", "工单详细描述"),
-                        "priority", Map.of("type", "string", "enum", List.of("LOW", "NORMAL", "HIGH"))
+                        "priority", Map.of(
+                                "type", "string",
+                                "description", "工单优先级：低/中/高 或 LOW/NORMAL/HIGH",
+                                "enum", List.of("LOW", "NORMAL", "HIGH", "低", "中", "高")
+                        )
                 ),
                 "required", List.of("title", "content")
         );
     }
 
     @Override
-    public Set<String> allowedRoles() { return Set.of("USER", "ADMIN"); }
+    public Set<String> allowedRoles() { return Set.of("USER", "ADMIN","UAR_System_Admin_IT"); }
 
     @Override
     public boolean requiresConfirmation() { return true; }

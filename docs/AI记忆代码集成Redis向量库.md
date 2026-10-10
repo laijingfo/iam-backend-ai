@@ -1,1269 +1,2336 @@
-# 企业智能助手 AI Agent 模块 — 完整功能描述文档
+# 企业智能助手 AI Agent 模块 — 完整详细功能文档
+
+> 版本：2.0
+> 更新日期：2026-10-10
+> 适用范围：`com.lenovo.ai.*` 全模块
+> 目标读者：后端开发、架构师、运维、测试
 
 ---
 
-## 一、模块概述
+## 目录
 
-本模块是基于 **Spring Boot + LangChain4j** 构建的企业级 AI Agent 对话系统，核心能力包括：
+1. [模块总览](#1-模块总览)
+2. [系统架构](#2-系统架构)
+3. [核心业务流程](#3-核心业务流程)
+4. [数据结构与模型](#4-数据结构与模型)
+5. [模块详细设计](#5-模块详细设计)
+6. [关键机制深度剖析](#6-关键机制深度剖析)
+7. [配置项说明](#7-配置项说明)
+8. [SSE 事件协议](#8-sse-事件协议)
+9. [异常处理与降级策略](#9-异常处理与降级策略)
+10. [性能与并发设计](#10-性能与并发设计)
+11. [安全与权限](#11-安全与权限)
+12. [部署与运维](#12-部署与运维)
+13. [扩展指南](#13-扩展指南)
+14. [已知问题与改进建议](#14-已知问题与改进建议)
+15. [附录：接口签名速查](#15-附录接口签名速查)
 
-| 能力                         | 说明                                       |
-| -------------------------- | ---------------------------------------- |
-| **流式对话**                   | 基于 SSE（Server-Sent Events）实时推送 LLM 输出到前端 |
-| **工具调用（Function Calling）** | LLM 可自主调用知识库检索、日期计算、工单创建等工具              |
-| **长期记忆**                   | 从对话中抽取用户偏好/事实/实体，存入 Redis 向量库，后续对话召回     |
-| **对话摘要**                   | 历史消息过长时自动压缩为摘要，控制上下文预算                   |
-| **知识库路由**                  | 基于向量相似度自动选择最相关的知识库                       |
-| **权限控制**                   | 工具按角色过滤，二次校验防止 LLM 幻觉调用未授权工具             |
-| **并发控制**                   | Redis 分布式锁保证同一会话串行；专用线程池限流               |
-| **挂起/确认**                  | 需确认的工具（如创建工单）挂起状态存 Redis，等待用户确认后恢复       |
+---
 
-### 整体架构分层
+## 1. 模块总览
+
+### 1.1 模块定位
+
+本模块是**企业级 AI Agent 对话系统**，位于 `iam-backend-ai` 项目中，为前端提供智能问答、业务查询、工具调用等能力，支持流式输出、长期记忆、知识库检索等特性。
+
+### 1.2 核心能力矩阵
+
+| 能力 | 技术实现 | 用户价值 |
+|------|----------|----------|
+| **流式对话** | Spring MVC SseEmitter + LangChain4j StreamingChatModel | 逐字输出，降低首字延迟 |
+| **工具调用** | Function Calling（OpenAI 兼容协议） | LLM 可查知识库、建工单、算日期 |
+| **长期记忆** | Redis + RediSearch HNSW 向量索引 | 记住用户偏好/事实，跨会话 |
+| **对话摘要** | LLM 压缩 + Redis 缓存 | 长对话上下文不超预算 |
+| **知识库路由** | Embedding + 余弦相似度 | 自动选最相关知识库 |
+| **权限控制** | 角色过滤 + 二次校验 | 防止越权工具调用 |
+| **并发控制** | Redis 分布式锁 + 专用线程池 | 会话串行、全局限流 |
+| **挂起/确认** | Redis 状态持久化 | 敏感操作等用户确认 |
+| **连接保活** | 心跳 + 超时回调 | 客户端断开可感知 |
+| **多语言** | LocaleContextHolder | 支持国际化 |
+
+### 1.3 技术栈
+
+| 层次 | 技术 | 版本/说明 |
+|------|------|-----------|
+| Web 框架 | Spring Boot | 3.x |
+| SSE | Spring MVC SseEmitter | 原生支持 |
+| LLM 框架 | LangChain4j | 1.x |
+| LLM 模型 | OpenAI 兼容（qwen3-max） | 通过 base-url 配置 |
+| Embedding | text-embedding-v3 | 1024 维（可配） |
+| 向量存储 | Redis + RediSearch | HNSW 索引 |
+| 缓存 | Redis | Lettuce 客户端 |
+| 序列化 | Jackson / FastJSON2 | 混合使用 |
+| TLS | Conscrypt | 提供 TLS 1.3 |
+| 线程池 | JDK ThreadPoolExecutor | 自定义 |
+| 日志 | SLF4J + Logback | Lombok @Slf4j |
+
+---
+
+## 2. 系统架构
+
+### 2.1 分层架构图
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Controller 层  AiAgentController.ChatRequest        │
-├─────────────────────────────────────────────────────┤
-│  Service 层     AiAgentService（入口/生命周期管理）    │
-├─────────────────────────────────────────────────────┤
-│  Agent 层       AiAgentRunner → AgentLoop            │
-│                 ├─ ContextBuilder（上下文构建）        │
-│                 ├─ ToolRegistry（工具注册/权限）       │
-│                 ├─ KnowledgeRouter（知识库路由）       │
-│                 └─ PendingStateStore（挂起状态）       │
-├─────────────────────────────────────────────────────┤
-│  LLM 层         LlmClient → LangChain4jLlmClient     │
-│                 ChatModel / StreamingChatModel        │
-├─────────────────────────────────────────────────────┤
-│  记忆层         MemoryStore（RedisMemoryStore）       │
-│                 MemoryExtractor / SummaryUtil         │
-│                 EmbeddingClient                       │
-├─────────────────────────────────────────────────────┤
-│  基础设施       ChatHistoryStore / RedisLockHelper    │
-│                 AiChatSseEmitter / AiChatExecutor     │
-└─────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                         前端（SSE 客户端）                          │
+└───────────────────────────────┬───────────────────────────────────┘
+                                │ HTTP POST /ai/agent/chat
+                                │ SSE: delta / tool / tool_confirm / done / error
+┌───────────────────────────────▼───────────────────────────────────┐
+│  Controller 层                                                     │
+│  AiAgentController.ChatRequest（sessionId, message, clientRequestId）│
+└───────────────────────────────┬───────────────────────────────────┘
+                                │
+┌───────────────────────────────▼───────────────────────────────────┐
+│  Service 层    AiAgentService                                      │
+│  ├─ 状态管理（runningEmitters/RunIds/Tokens/RequestIds）           │
+│  ├─ 生命周期（清理旧状态、加锁、注册回调、提交线程池）              │
+│  └─ 停止控制（stop by clientRequestId）                            │
+└───────────────────────────────┬───────────────────────────────────┘
+                                │ AiChatExecutor.submit
+┌───────────────────────────────▼───────────────────────────────────┐
+│  Agent 层    AiAgentRunner → AgentLoop                             │
+│  ├─ ContextBuilder（历史 + 记忆 + 系统提示）                       │
+│  ├─ ToolRegistry（工具注册 + 权限过滤）                            │
+│  ├─ KnowledgeRouter（知识库向量路由）                              │
+│  ├─ PendingStateStore（挂起状态 Redis）                            │
+│  └─ 工具执行（超时 + 异常保护 + ThreadLocal 清理）                  │
+└───────────────────────────────┬───────────────────────────────────┘
+                                │
+┌───────────────────────────────▼───────────────────────────────────┐
+│  LLM 层    LlmClient → LangChain4jLlmClient                        │
+│  ├─ chatStream（流式 + 工具调用）                                  │
+│  └─ chatSimple（非流式，供摘要/记忆抽取）                          │
+└───────────────────────────────┬───────────────────────────────────┘
+                                │
+┌───────────────────────────────▼───────────────────────────────────┐
+│  记忆层                                                            │
+│  ├─ MemoryStore（RedisMemoryStore：向量 KNN + 衰减 + 失效）         │
+│  ├─ MemoryExtractor（异步抽取）                                    │
+│  ├─ SummaryUtil（摘要 + 抽取 + 校验）                              │
+│  └─ EmbeddingClient（LangChain4jEmbeddingClient）                  │
+└───────────────────────────────┬───────────────────────────────────┘
+                                │
+┌───────────────────────────────▼───────────────────────────────────┐
+│  基础设施层                                                        │
+│  ├─ ChatHistoryStore（InMemoryChatHistoryStore）                   │
+│  ├─ RedisLockHelper（Lua 原子解锁）                                │
+│  ├─ AiChatSseEmitter（SSE 封装）                                   │
+│  ├─ AiChatExecutor（AI 线程池）                                    │
+│  └─ AsyncConfig（memoryExecutor）                                  │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
-### 一次完整对话的时序
+### 2.2 依赖关系图
 
 ```
-前端 → AiAgentService.chat()
-  1. 清理旧状态（旧 emitter / 旧锁）
-  2. 注册新 emitter、token、runId、requestId
-  3. Redis 加锁（5s TTL）
-  4. 会话初始化（newSession / assertOwner）
-  5. 注册生命周期回调
-  6. 提交到 AiChatExecutor 线程池
-       └─ AiAgentRunner.run()
-            a. 落库 user 消息
-            b. 向量召回长期记忆
-            c. ContextBuilder 构建上下文
-            d. 注入系统提示词
-            e. AgentLoop.run()
-                 ├─ llmClient.chatStream() 流式调用
-                 ├─ 若有 tool_calls → 执行工具 → 结果回填 → 下一轮
-                 ├─ 若需确认 → 存 PendingState → 发 tool_confirm 事件 → 退出
-                 └─ 无 tool_calls → 落库 assistant 消息 → 发 done 事件
-            f. 异步抽取长期记忆
-  7. finally 释放 Redis 锁
+AiAgentService
+  ├── ChatHistoryStore
+  ├── RedisLockHelper
+  ├── RedisUtils
+  ├── AiChatExecutor
+  └── AiAgentRunner
+        ├── ContextBuilder
+        │     ├── ChatHistoryStore
+        │     └── SummaryUtil
+        │           ├── LlmClient
+        │           ├── RedisUtils
+        │           └── ObjectMapper
+        ├── AgentLoop
+        │     ├── LlmClient
+        │     ├── ToolRegistry
+        │     │     └── List<AiTool>
+        │     ├── ChatHistoryStore
+        │     └── PendingStateStore
+        ├── MemoryStore（RedisMemoryStore）
+        ├── MemoryExtractor
+        │     ├── MemoryStore
+        │     ├── EmbeddingClient
+        │     └── SummaryUtil
+        ├── EmbeddingClient
+        ├── ChatHistoryStore
+        └── RedisLockHelper
+
+QueryKnowledgeTool
+  ├── KnowledgeService
+  ├── KnowledgeTemplateRegistry
+  ├── KnowledgeRegistrar
+  └── KnowledgeRouter
+        ├── KnowledgeService
+        └── EmbeddingModel（LangChain4j）
 ```
 
 ---
 
-## 二、逐文件功能说明
+## 3. 核心业务流程
 
-### 1. `AiAgentRunner.java`
+### 3.1 完整对话时序图
 
-**职责**：Agent 运行的编排入口，串联「落库 → 记忆召回 → 上下文构建 → 系统提示注入 → AgentLoop → 记忆抽取」全流程，并保证锁释放。
+```
+前端              Service            Runner           AgentLoop        LLM           工具/Redis
+ │                  │                  │                  │              │              │
+ │─ POST chat ─────>│                  │                  │              │              │
+ │                  │─ 清理旧状态 ─────────────────────────────────────────────────────>│
+ │                  │─ 注册 emitter/runId/token/requestId ──────────────────────────────│
+ │                  │─ tryLock ────────────────────────────────────────────────────────>│
+ │                  │<─ locked ─────────────────────────────────────────────────────────│
+ │                  │─ 会话初始化（exists/assertOwner）──>│              │              │
+ │                  │─ capture AiToolContext ──────────────────────────────────────────>│
+ │                  │─ nextMessageId × 2 ──────────────>│              │              │
+ │                  │─ onCompletion/onTimeout 注册 ────>│              │              │
+ │                  │─ chatExecutor.submit ───────────>│              │              │
+ │<─ SSE emitter ───│                  │                  │              │              │
+ │                  │                  │─ appendUser ────────────────────────────────>│
+ │                  │                  │─ embed(message) ────────────────────────────>│
+ │                  │                  │<─ qVec ──────────────────────────────────────│
+ │                  │                  │─ searchByUser ──────────────────────────────>│
+ │                  │                  │<─ memories ──────────────────────────────────│
+ │                  │                  │─ contextBuilder.build ──────────────────────>│
+ │                  │                  │<─ messages ──────────────────────────────────│
+ │                  │                  │─ inject system prompt ──>│              │
+ │                  │                  │─ new AgentContext ──────>│              │
+ │                  │                  │─ agentLoop.run ────────>│              │
+ │                  │                  │                  │─ chatStream ─>│       │
+ │<─ delta ────────────────────────────────────────────────────│              │
+ │<─ delta ────────────────────────────────────────────────────│              │
+ │                  │                  │                  │<─ LlmResponse│       │
+ │                  │                  │                  │  (tool_calls)│       │
+ │                  │                  │                  │─ executeTool ────────>│
+ │<─ tool(executing)──────────────────────────────────────────│              │
+ │                  │                  │                  │<─ ToolResult ────────│
+ │<─ tool(completed)──────────────────────────────────────────│              │
+ │                  │                  │                  │─ chatStream ─>│       │
+ │<─ delta ────────────────────────────────────────────────────│              │
+ │                  │                  │                  │<─ final ─────│       │
+ │                  │                  │                  │─ appendAssistant ────>│
+ │<─ done ────────────────────────────────────────────────────│              │
+ │                  │                  │<─ loop exit ─────│              │
+ │                  │                  │─ memoryExtractor.extract（异步）──>│
+ │                  │<─ run 结束 ──────│                  │              │
+ │                  │─ unlock ────────────────────────────────────────────────────────>│
+ │<─ SSE complete ──│                  │                  │              │              │
+```
 
-### 2. `AgentContext.java`
+### 3.2 需确认工具流程
 
-**职责**：单次 Agent 运行的可变上下文载体。持有消息列表、工具上下文、SSE emitter、sessionId、assistantMessageId、runId、memoryId、已确认工具调用集合。`confirmedCalls` 用于「需确认工具」重启后跳过二次确认。
+```
+第 N 步：LLM 返回 tool_calls = [create_ticket]
+   │
+   ├─ requiresConfirmation() == true
+   ├─ ctx.confirmed(call.id()) == false
+   │
+   ▼
+replaceMessages(ctx.messages(), messages)  // 回写本地消息列表
+pendingStateStore.save(ctx)                // 存 Redis，TTL 10 分钟
+sendEvent("tool_confirm", {callId, tool, args})
+emitter.complete()                          // 关闭 SSE，等待用户确认
+   │
+   ▼
+用户确认后（外部接口）：
+   ├─ pendingStateStore.load(runId)
+   ├─ ctx.confirmedCalls.add(callId) 或 markConfirmed(callId)
+   ├─ agentLoop.run(ctx)  // 重新进入循环
+   └─ 此时 requiresConfirmation && !confirmed → false，正常执行
+```
 
-### 3. `AgentLoop.java`
+### 3.3 知识库路由流程
 
-**职责**：Agent 的核心循环（ReAct 风格）。最多 8 步，每步调用 LLM；若 LLM 返回 tool_calls 则执行工具并回填结果，否则输出最终答案并结束。支持：
-
-- SSE 关闭检测（提前退出）
-- 工具超时保护（30s）
-- 工具权限二次校验
-- 需确认工具挂起（存 Redis + 发 `tool_confirm` 事件）
-- 最大步数兜底
-
-### 4. `PendingStateStore.java`
-
-**职责**：将需确认工具调用的中间状态（消息列表、已确认集合、runId、sessionId、assistantMessageId 等）序列化到 Redis，TTL 10 分钟。用户确认后由外部恢复。
-
-### 5. `KnowledgeRouter.java`
-
-**职责**：知识库向量路由。启动时后台预热所有知识库描述向量（文档标题拼接），请求时用问题向量与各知识库向量做余弦相似度，返回最相关（≥0.5 阈值）的知识库 ID。具备**失败自愈**：缓存为空且距上次尝试 > backoff 时，请求链路兜底重建。
-
-### 6. `AiChatExecutor.java`
-
-**职责**：AI 对话专用线程池。核心线程 0，最大并发可配（默认 16），有界队列（默认 100），拒绝策略返回 false 而非抛异常。空闲 60s 回收线程。关闭时优雅等待 30s。
-
-### 7. `AsyncConfig.java`
-
-**职责**：定义 `memoryExecutor` 线程池，供 `MemoryExtractor` 异步抽取记忆使用。
-
-### 8. `LangChain4jConfig.java`
-
-**职责**：统一配置 LangChain4j 的 `ChatModel`（非流式）、`StreamingChatModel`（流式）、`EmbeddingModel` 三个 Bean。安装 Conscrypt 提供 TLS 1.3，共享 JDK HttpClient。
-
-### 9. `ChatHistoryStore.java` / `InMemoryChatHistoryStore.java`
-
-**职责**：会话历史存储接口与内存实现（TODO 待 PG 表就绪后替换）。提供消息落库、会话列表、owner 校验、政策状态、assistant 消息读取等。
-
-### 10. `RedisLockHelper.java`
-
-**职责**：Redis 分布式锁。`tryLock` 用 `setIfAbsent` + TTL；`unlock` 用 Lua 脚本比对 token 后删除，避免误删他人锁。
-
-### 11. `AiChatSseEmitter.java`
-
-**职责**：SSE 发射器封装。内部 `closed` 标志位保证 `complete()` 幂等；`onCompletion`/`onTimeout` 触发关闭回调（用于中断 LLM 流）；提供 `send(String)`、`send(eventName, data)`、`send(SseEventBuilder)` 三种发送方式，IOException 时自动标记关闭。
-
-### 12. `KnowledgeRegistrar.java` / `KnowledgeTemplateRegistry.java`
-
-**职责**：知识库注册与模板缓存。`register` 校验知识库归属项目后，构建 `KnowledgeBase` 模板（含 embedding 模型、indexMode、topK），存入 `templateRegistry`（ConcurrentHashMap）。
-
-### 13. `MessageRole.java` / `Message.java` / `LlmResponse.java` / `LlmClient.java`
-
-**职责**：LLM 抽象层。`Message` 是统一消息模型（role/content/toolCallId/toolCalls）；`LlmResponse` 是 LLM 返回（content + toolCalls）；`LlmClient` 定义 `chatStream` 与 `chatSimple`。
-
-### 14. `LangChain4jLlmClient.java`
-
-**职责**：`LlmClient` 的 LangChain4j 实现。将内部 `Message`/`ToolSpec` 转换为 LangChain4j 的 `ChatMessage`/`ToolSpecification`，调用流式模型，通过 `StreamingChatResponseHandler` 回调推送 delta，收集 tool_calls，最终返回 `LlmResponse`。120s 超时。
-
-### 15. `ContextBuilder.java`
-
-**职责**：构建 LLM 上下文。加载历史消息 → 分离 system/dialog → 注入长期记忆块 → 超过 6 轮时对老消息做摘要 → 控制总字符数（24000）→ 可选追加本轮 user 消息。
-
-### 16. `EmbeddingClient.java` / `LangChain4jEmbeddingClient.java`
-
-**职责**：向量化接口与实现。复用 `EmbeddingModel` Bean，将文本转为 `List<Double>`。
-
-### 17. `MemoryDecayJob.java`
-
-**职责**：每日 3 点执行记忆衰减。遍历活跃用户，对每条记忆 importance × 0.95，删除 importance < 0.1 的记忆。
-
-### 18. `MemoryExtractor.java`
-
-**职责**：异步从一轮对话中抽取长期记忆。调用 `SummaryUtil.extractLongTermMemoriesAsList` 拿到结构化列表，逐条去重、embedding、保存。单条失败不影响整批。
-
-### 19. `MemoryItem.java` / `MemoryStore.java` / `RedisMemoryStore.java`
-
-**职责**：长期记忆模型与存储。`RedisMemoryStore` 用 RediSearch 建 HNSW 向量索引，支持 `searchByUser`（KNN 检索）、`findByUserAndContentLike`、`invalidate`、`decayAll`、`deleteBelow`、`getAllActiveUsers`（SCAN）。主数据用原生 Lettuce 字节读写，辅助索引用 StringRedisTemplate。
-
-### 20. `SummaryUtil.java`
-
-**职责**：对话摘要 + 长期记忆抽取。含：
-
-- `summarize`：带 Redis 缓存的摘要生成，防御 LLM 返回 requestId
-- `extractLongTermMemoriesAsList`：LLM 抽取 + JSON 解析 + 字段校验规范化
-- `stripCodeFence`：剥离 markdown 代码块
-- `looksLikeId`：识别 UUID/hex id，防止脏数据入库
-
-### 21. `AiAgentService.java`
-
-**职责**：对话入口与生命周期管理。维护 `runningEmitters/runningRunIds/runningTokens/runningRequestIds` 四个 ConcurrentHashMap。核心逻辑：
-
-- 新请求到来时清理旧状态（forceUnlock → 关闭旧 emitter）
-- 注册新状态 → 加锁 → 初始化会话 → 注册回调 → 提交线程池
-- `stop` 支持按 clientRequestId 精确停止
-
-### 22. `KnowledgeService.java`
-
-**职责**：知识库服务接口（queryAnswer、queryKnowledgeBase、getDocuments 等），由具体实现对接下游知识库网关。
-
-### 23. `AiTool.java` / `ToolSpec.java` / `ToolResult.java` / `ToolRegistry.java`
-
-**职责**：工具抽象。`AiTool` 定义 name/description/parameterSchema/execute/allowedRoles/requiresConfirmation；`ToolRegistry` 注册所有 `AiTool` Bean，提供按角色过滤的可用工具列表和执行前二次校验。
-
-### 24. `AiToolContext.java`
-
-**职责**：工具执行上下文（ThreadLocal）。从 Redis 读取用户真实角色列表，供工具做权限判断。
-
-### 25. `CreateTicketTool.java` / `DateTool.java` / `QueryKnowledgeTool.java`
-
-**职责**：
-
-- **CreateTicketTool**：创建工单，`requiresConfirmation=true`，需用户确认后执行。
-- **DateTool**：获取当前日期 / 计算天数差，禁止 LLM 凭记忆回答日期。
-- **QueryKnowledgeTool**：知识库精准问答。knowledgeBaseId 可选（需 13 位以上纯数字且已注册），否则由 KnowledgeRouter 自动路由。
+```
+QueryKnowledgeTool.execute(args)
+   │
+   ├─ knowledgeBaseId 显式传入？
+   │   ├─ 是 → parseKbId → isValidKnowledgeId（13位纯数字 + 已注册）
+   │   │       ├─ 有效 → 直接用
+   │   │       └─ 无效 → 回落自动路由
+   │   └─ 否 → 自动路由
+   │
+   ▼
+KnowledgeRouter.route(question)
+   ├─ ensureReady()：缓存空则兜底重建
+   ├─ embed(question) → questionVec
+   ├─ 遍历 kbVectors，计算余弦相似度
+   ├─ bestScore < MIN_SCORE(0.5) → 返回 null
+   └─ 返回 bestKbId
+   │
+   ▼
+queryOne(kbId, question)
+   ├─ templateRegistry.get(knowledgeId)
+   ├─ 不存在 → knowledgeRegistrar.register(knowledgeId)
+   ├─ copyTemplate（避免污染模板）
+   ├─ kb.setQuery(question)
+   ├─ knowledgeService.queryAnswer(kb)
+   └─ 拼接结果（最多 5 条，每条 800 字）
+```
 
 ---
 
-## 三、给所有代码逐行填注释
+## 4. 数据结构与模型
 
-由于篇幅限制，以下为**关键文件的逐行注释**（核心逻辑文件），其余文件注释相对简单。
+### 4.1 核心数据模型
 
----
-
-### `AiAgentRunner.java`（逐行注释）
+#### 4.1.1 Message（统一消息模型）
 
 ```java
-package com.lenovo.ai.agent;                                                    // 包声明：Agent 编排层
-
-import com.lenovo.ai.agent.loop.AgentContext;                                   // 单次运行上下文
-import com.lenovo.ai.agent.loop.AgentLoop;                                      // Agent 主循环
-import com.lenovo.ai.infra.history.ChatHistoryStore;                            // 会话历史存储
-import com.lenovo.ai.infra.lock.RedisLockHelper;                                // Redis 分布式锁工具
-import com.lenovo.ai.infra.sse.AiChatSseEmitter;                                // SSE 发射器封装
-import com.lenovo.ai.llm.Message;                                               // 统一消息模型
-import com.lenovo.ai.memory.*;                                                  // 记忆相关（ContextBuilder/MemoryStore/MemoryExtractor/EmbeddingClient）
-import com.lenovo.ai.tools.context.AiToolContext;                               // 工具执行上下文
-import com.lenovo.controller.ai.AiAgentController.ChatRequest;                  // 控制器请求体
-import lombok.RequiredArgsConstructor;                                          // Lombok：构造注入
-import lombok.extern.slf4j.Slf4j;                                               // Lombok：日志
-import org.springframework.stereotype.Component;                                // Spring 组件
-
-import java.util.List;                                                          // 集合
-import java.util.Locale;                                                        // 国际化
-import java.util.stream.Collectors;                                             // 流收集器
-
-@Slf4j                                                                          // 注入 log 字段
-@Component                                                                      // 注册为 Spring Bean
-@RequiredArgsConstructor                                                        // 为 final 字段生成构造器
-public class AiAgentRunner {                                                    // Agent 运行编排入口
-
-    private final ContextBuilder contextBuilder;                                // 上下文构建器（历史+记忆拼装）
-    private final AgentLoop agentLoop;                                          // Agent 主循环（LLM+工具）
-    private final MemoryStore memoryStore;                                      // 长期记忆存储（向量检索）
-    private final MemoryExtractor memoryExtractor;                              // 记忆抽取器（异步）
-    private final EmbeddingClient embeddingClient;                              // 向量化客户端
-    private final ChatHistoryStore history;                                     // 会话历史存储
-    private final RedisLockHelper redisLockHelper;                              // Redis 锁工具
-
-    /**                                                                         // 方法 Javadoc 开始
-     * 执行一次 Agent 完整运行。                                                   // 方法说明
-     *                                                                          // 空行
-     * 注意：本方法在专用线程池中执行，所有异常都在此处兜底，                        // 线程模型说明
-     * 保证 finally 释放 Redis 锁。                                               // 锁释放保证
-     */                                                                         // Javadoc 结束
-    public void run(ChatRequest request, AiToolContext toolContext, String userId,
-                    boolean newSession, String sessionId,
-                    long userMessageId, long assistantMessageId,
-                    Locale locale, String memoryId, String lockKey,
-                    String token, AiChatSseEmitter emitter, String runId) {     // 参数：请求/工具上下文/用户/session/消息ID/语言/记忆ID/锁/SSE/运行ID
-        try {                                                                   // 主流程 try，异常兜底
-            history.appendUser(userMessageId, sessionId, userId, request.message()); // 1. 落库本轮 user 消息（后续 history.load 会包含它）
-
-            // 长期记忆召回：用本轮问题做向量检索，把召回结果拼进系统上下文。       // 注释：记忆召回说明
-            List<Double> qVec = embeddingClient.embed(request.message());       // 2. 将用户问题向量化
-            List<MemoryItem> memories = memoryStore.searchByUser(userId, qVec, 5);// 3. 从用户记忆中 KNN 召回 top5
-            String memoryBlock = memories.stream()                              // 4. 将召回记忆拼成文本块
-                    .map(m -> "- " + m.content())                               //    每条前缀 "- "
-                    .collect(Collectors.joining("\n"));                         //    换行拼接
-
-            // ContextBuilder 不在内部重复追加 user 消息：                           // 注释：上下文构建说明
-            // appendUser 已落库，load 会包含本轮问题；若存储实现暂时 load 为空，      //    说明落库与 load 的关系
-            // 则显式补一条，保证模型一定能看到本轮问题。                            //    兜底策略
-            List<Message> messages = contextBuilder.build(sessionId, request.message(), memoryBlock); // 5. 构建上下文（历史+记忆+本轮问题）
-
-            // ✅ 在消息列表最前面注入基础系统提示词，告诉 LLM 必须调用知识库工具、必须基于检索结果作答 // 6. 注入系统提示词
-            messages.add(0, Message.system("""                                  //    在最前面插入 system 消息
-                你是一个企业智能助手，必须严格遵守以下规则：                       //    规则正文（多行文本块）
-                                                                                    //    空行
-                1. **优先使用工具**：当用户询问业务数据、制度、流程、待办、审批等问题时，必须调用知识库工具（query_knowledge）检索，不要用自己的知识编造答案。 // 规则1
-                2. **基于检索结果作答**：工具返回的结果是唯一可信来源。如果检索结果为空或不确定，明确告知用户"未找到相关信息"，不要编造。 // 规则2
-                3. **知识库 ID 规则**：除非用户明确给出 13 位及以上纯数字的知识库 ID，否则不要传 knowledgeBaseId 参数，系统会自动路由到最相关的知识库。 // 规则3
-                4. **答案格式**：先直接回答问题，再引用检索到的具体内容（不要编造引用来源）。 // 规则4
-                5. **审核/审批相关问题**：涉及审核人、审核流程、审核频率等问题，必须调用知识库工具检索相关制度文档。 // 规则5
-                                                                                    //    空行
-                如果用户问题与业务无关（如闲聊、通用知识），可以直接回答，但仍需保持专业友好的语气。 // 兜底规则
-                """));
-
-            // 检查历史消息是否包含本轮 user 消息，若不包含则显式补充                 // 7. 校验本轮问题是否已在上下文中
-            boolean containsCurrent = messages.stream()                             //    流式检查
-                    .anyMatch(m -> m.role() == com.lenovo.ai.llm.enums.MessageRole.USER // 角色为 USER
-                            && request.message().equals(m.content()));          //    且内容匹配
-            if (!containsCurrent) {                                                 // 8. 若未包含
-                log.debug("历史消息不包含本轮问题，显式补充");                        //    仅打 debug 日志（ContextBuilder 已兜底，无需重复添加）
-            }
-
-            AgentContext ctx = new AgentContext(                                // 9. 构造运行上下文
-                    messages, toolContext, emitter, sessionId,                  //    消息/工具上下文/SSE/sessionId
-                    assistantMessageId, runId, memoryId);                       //    assistantMessageId/runId/memoryId
-            agentLoop.run(ctx);                                                 // 10. 进入 Agent 主循环
-
-            // 异步抽取长期记忆：本轮 user + assistant 作为一组对话。                  // 11. 记忆抽取
-            List<Message> turn = List.of(                                       //    构造本轮对话
-                    Message.user(request.message()),                            //    用户消息
-                    Message.assistant(history.loadAssistant(assistantMessageId))//    助手回答（从存储读取）
-            );
-            memoryExtractor.extract(userId, turn);                              // 12. 异步抽取（@Async memoryExecutor）
-
-        } catch (Exception e) {                                                 // 13. 异常兜底
-            log.error("AiAgentRunner 异常，runId={}", runId, e);                 //    记录错误日志
-        } finally {                                                             // 14. 无论如何
-            // 只释放自己持有的锁（token 比对由 Lua 脚本保证），避免误删其他请求的锁。 //    锁释放注释
-            redisLockHelper.unlock(lockKey, token);                             //    释放 Redis 锁（Lua 比对 token）
-        }
-    }
+public record Message(
+    MessageRole role,              // SYSTEM / USER / ASSISTANT / TOOL
+    String content,                // 文本内容
+    String toolCallId,             // TOOL 角色时：对应的 tool_call id
+    List<ToolCallRef> toolCalls    // ASSISTANT 角色时：工具调用列表
+) {
+    record ToolCallRef(String id, String name, Map<String, Object> args) {}
 }
 ```
 
----
+**工厂方法**：
+| 方法 | role | 用途 |
+|------|------|------|
+| `system(c)` | SYSTEM | 系统提示 |
+| `user(c)` | USER | 用户输入 |
+| `assistant(c)` | ASSISTANT | 助手文本回答 |
+| `assistantWithTools(c, calls)` | ASSISTANT | 助手工具调用 |
+| `toolResult(callId, c)` | TOOL | 工具执行结果 |
 
-### `AgentLoop.java`（逐行注释）
+#### 4.1.2 LlmResponse
 
 ```java
-package com.lenovo.ai.agent.loop;                                               // 包声明
-
-import com.lenovo.ai.infra.history.ChatHistoryStore;                            // 历史存储
-import com.lenovo.ai.infra.sse.AiChatSseEmitter;                                // SSE 发射器
-import com.lenovo.ai.llm.LlmClient;                                             // LLM 客户端接口
-import com.lenovo.ai.llm.LlmResponse;                                           // LLM 响应
-import com.lenovo.ai.llm.Message;                                               // 消息模型
-import com.lenovo.ai.memory.MemoryStore;                                        // 记忆存储（当前未使用，可能预留）
-import com.lenovo.ai.tools.AiTool;                                              // 工具接口
-import com.lenovo.ai.tools.ToolRegistry;                                        // 工具注册表
-import com.lenovo.ai.tools.ToolResult;                                          // 工具结果
-import com.lenovo.ai.tools.ToolSpec;                                            // 工具描述
-import com.lenovo.ai.tools.context.AiToolContext;                               // 工具上下文
-import lombok.RequiredArgsConstructor;                                          // 构造注入
-import lombok.extern.slf4j.Slf4j;                                               // 日志
-import org.springframework.stereotype.Component;                                // Spring 组件
-
-import java.util.ArrayList;                                                     // 动态数组
-import java.util.List;                                                          // 列表
-import java.util.Map;                                                           // Map
-import java.util.concurrent.CompletableFuture;                                  // 异步任务
-import java.util.concurrent.TimeUnit;                                           // 时间单位
-
-@Slf4j                                                                          // 日志
-@Component                                                                      // 注册 Bean
-@RequiredArgsConstructor                                                        // 构造注入
-public class AgentLoop {                                                        // Agent 主循环
-
-    private static final int MAX_STEPS = 8;                                     // 最大工具调用步数（防止无限循环）
-    private static final int TOOL_TIMEOUT_SECONDS = 30;                         // 单次工具执行超时（秒）
-
-    private final LlmClient llmClient;                                          // LLM 客户端
-    private final ToolRegistry toolRegistry;                                    // 工具注册表
-    private final ChatHistoryStore history;                                     // 历史存储
-    private final PendingStateStore pendingStateStore;                          // 挂起状态存储（需确认工具）
-    private final MemoryStore memoryStore;                                      // 记忆存储（当前未使用）
-
-    /**                                                                         // Javadoc
-     * 运行 Agent 循环。                                                          // 说明
-     */                                                                         // 结束
-    public void run(AgentContext ctx) {                                         // 入口方法
-        try {                                                                   // 主流程 try
-            List<Message> messages = new ArrayList<>(ctx.messages());           // 1. 拷贝消息列表（避免外部修改）
-            List<ToolSpec> tools = toolRegistry.availableTools(ctx.toolContext());// 2. 按角色过滤可用工具
-            log.info(">>> AgentLoop 启动, runId={}, 可用工具 {} 个", ctx.runId(), tools.size()); // 日志
-
-            for (int step = 0; step < MAX_STEPS; step++) {                      // 3. 循环最多 MAX_STEPS 次
-                // SSE 连接已关闭（被 stop 或新请求取代），立即退出                 //    提前退出条件
-                if (ctx.emitter().isClosed()) {                                 // 4. 检测 SSE 是否关闭
-                    log.info(">>> AgentLoop 检测到 SSE 已关闭, runId={}, step={}", ctx.runId(), step); // 日志
-                    return;                                                     //    直接返回
-                }
-                log.info(">>> AgentLoop step={}, runId={}", step, ctx.runId()); // 5. 记录步数
-
-                LlmResponse resp = llmClient.chatStream(messages, tools, ctx.emitter()); // 6. 流式调用 LLM
-
-                if (!resp.hasToolCalls()) {                                     // 7. 若无工具调用 → 最终答案
-                    history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), resp.content()); // 7.1 落库 assistant 消息
-                    sendEvent(ctx.emitter(), "done", Map.of("messageId", ctx.assistantMessageId())); // 7.2 发送 done 事件
-                    ctx.emitter().complete();                                   // 7.3 关闭 SSE
-                    return;                                                     // 7.4 结束
-                }
-
-                List<Message.ToolCallRef> refs = resp.toolCalls().stream()      // 8. 有工具调用：转换格式
-                        .map(tc -> new Message.ToolCallRef(tc.id(), tc.name(), tc.args())) //    映射为内部 ToolCallRef
-                        .toList();                                              //    收集为 List
-                messages.add(Message.assistantWithTools(resp.content(), refs)); // 8.1 将 assistant+toolCalls 加入消息列表
-
-                for (LlmResponse.ToolCall call : resp.toolCalls()) {            // 9. 逐个执行工具调用
-                    AiTool tool = toolRegistry.get(call.name());                // 9.1 查找工具
-                    if (tool == null) {                                         // 9.2 工具不存在
-                        messages.add(Message.toolResult(call.id(), "工具不存在: " + call.name())); //    回填错误结果
-                        continue;                                               //    继续下一个
-                    }
-
-                    if (!toolRegistry.isAllowed(call.name(), ctx.toolContext())) { // 9.3 权限二次校验
-                        messages.add(Message.toolResult(call.id(), "无权限调用该工具")); //    回填拒绝结果
-                        sendEvent(ctx.emitter(), "tool", Map.of(                //    发送 tool 事件
-                                "name", call.name(),                            //    工具名
-                                "status", "denied"                              //    状态：拒绝
-                        ));
-                        continue;                                               //    继续下一个
-                    }
-
-                    if (tool.requiresConfirmation() && !ctx.confirmed(call.id())) { // 9.4 需确认且未确认
-                        replaceMessages(ctx.messages(), messages);              //    将本地消息列表回写 ctx
-                        pendingStateStore.save(ctx);                            //    保存挂起状态到 Redis
-                        sendEvent(ctx.emitter(), "tool_confirm", Map.of(        //    发送 tool_confirm 事件
-                                "callId", call.id(),                            //    调用 ID
-                                "tool", call.name(),                            //    工具名
-                                "args", call.args()                             //    参数
-                        ));
-                        ctx.emitter().complete();                               //    关闭 SSE（等待用户确认后恢复）
-                        return;                                                 //    结束本次 run
-                    }
-
-                    sendEvent(ctx.emitter(), "tool", Map.of(                    // 9.5 发送 tool 事件（执行中）
-                            "name", call.name(),                                //    工具名
-                            "args", call.args(),                                //    参数
-                            "status", "executing"                               //    状态：执行中
-                    ));
-
-                    ToolResult result = executeWithGuard(tool, call, ctx);      // 9.6 带超时/异常保护执行工具
-
-                    sendEvent(ctx.emitter(), "tool", Map.of(                    // 9.7 发送 tool 事件（完成）
-                            "name", call.name(),                                //    工具名
-                            "args", call.args(),                                //    参数
-                            "status", result.success() ? "completed" : "failed",//    状态
-                            "result", result.content()                          //    结果内容
-                    ));
-
-                    messages.add(Message.toolResult(call.id(), result.content())); // 9.8 将工具结果加入消息列表（下一轮 LLM 可见）
-                }
-            }
-
-            history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), "[已达到最大工具调用步数]"); // 10. 达到最大步数：落库兜底消息
-            sendEvent(ctx.emitter(), "done", Map.of("messageId", ctx.assistantMessageId())); // 11. 发送 done
-            ctx.emitter().complete();                                           // 12. 关闭 SSE
-
-        } catch (Exception e) {                                                 // 13. 异常兜底
-            log.error("AgentLoop 异常, runId={}", ctx.runId(), e);              //    日志
-            try {                                                               //    尝试发送 error 事件
-                sendEvent(ctx.emitter(), "error", Map.of(                       //    发送 error
-                    "code", "INTERNAL_ERROR",                                   //    错误码
-                    "message", "处理失败: " + e.getMessage()                    //    错误消息
-                ));
-            } catch (Exception ignored) {}                                      //    忽略发送异常
-            try {                                                               //    尝试关闭 SSE
-                ctx.emitter().complete();                                       //    关闭
-            } catch (Exception ignored) {}                                      //    忽略异常
-        }
-    }
-
-    /**                                                                         // Javadoc
-     * 将 source 内容覆盖到 target（用于挂起前回写 ctx.messages）。                // 说明
-     */                                                                         // 结束
-    private void replaceMessages(List<Message> target, List<Message> source) {  // 覆盖方法
-        target.clear();                                                         // 清空目标
-        target.addAll(source);                                                  // 添加源内容
-    }
-
-    /**                                                                         // Javadoc
-     * 带超时与异常保护的工具执行。                                                // 说明
-     */                                                                         // 结束
-    private ToolResult executeWithGuard(AiTool tool, LlmResponse.ToolCall call, AgentContext ctx) { // 方法签名
-        try {                                                                   // 外层 try
-            return CompletableFuture.supplyAsync(() -> {                        // 异步执行
-                        AiToolContext.set(ctx.toolContext());                   //    设置 ThreadLocal 上下文
-                        try {                                                   //    内层 try
-                            return tool.execute(call.args(), ctx.toolContext());//    执行工具
-                        } finally {                                             //    finally
-                            AiToolContext.clear();                              //    清理 ThreadLocal（防止线程池污染）
-                        }
-                    })
-                    .orTimeout(TOOL_TIMEOUT_SECONDS, TimeUnit.SECONDS)          // 超时设置
-                    .exceptionally(e -> {                                       // 异常处理
-                        log.error("工具执行异常: {}", tool.name(), e);            //    日志
-                        return ToolResult.fail("工具执行失败: " + e.getMessage()); //    返回失败结果
-                    })
-                    .join();                                                    // 阻塞等待
-        } catch (Exception e) {                                                 // 提交异常
-            log.error("工具提交失败: {}", tool.name(), e);                        //    日志
-            return ToolResult.fail("工具执行失败: " + e.getMessage());            //    返回失败结果
-        }
-    }
-
-    /**                                                                         // Javadoc
-     * 发送 SSE 事件（统一前端事件名格式）。                                        // 说明
-     */                                                                         // 结束
-    private void sendEvent(AiChatSseEmitter emitter, String name, Map<String, Object> data) { // 方法签名
-        // 统一事件名为前端约定的格式                                             // 注释
-        String frontendEventName = switch (name) {                              // 事件名映射
-            case "tool_call" -> "tool";                                         //    tool_call → tool
-            case "tool_confirm" -> "tool_confirm";                              //    tool_confirm 保持不变
-            default -> name;                                                    //    其他保持不变
-        };
-        emitter.send(frontendEventName, data);                                  // 发送事件
-    }
+public record LlmResponse(
+    String content,           // 文本内容（可能为空）
+    List<ToolCall> toolCalls  // 工具调用列表
+) {
+    record ToolCall(String id, String name, Map<String, Object> args) {}
+    boolean hasToolCalls() { return toolCalls != null && !toolCalls.isEmpty(); }
 }
+```
+
+#### 4.1.3 ToolResult
+
+```java
+public record ToolResult(
+    boolean success,                // 是否成功
+    String content,                 // 结果内容（给 LLM 看）
+    Map<String, Object> meta        // 元数据（如 knowledgeBaseId）
+) {
+    static ToolResult ok(String content);
+    static ToolResult ok(String content, Map<String, Object> meta);
+    static ToolResult fail(String msg);
+}
+```
+
+#### 4.1.4 ToolSpec
+
+```java
+public record ToolSpec(
+    String name,                          // 工具名（LLM 调用标识）
+    String description,                   // 描述（LLM 判断何时调用）
+    Map<String, Object> parameterSchema   // JSON Schema
+) {}
+```
+
+#### 4.1.5 MemoryItem
+
+```java
+public record MemoryItem(
+    String id,                  // UUID
+    String userId,              // 所属用户
+    String type,                // PREFERENCE / FACT / ENTITY
+    String content,             // 记忆内容
+    List<Double> embedding,     // 向量
+    double importance,          // 重要性 [0, 1]
+    long createdAt,             // 创建时间戳
+    long updatedAt,             // 更新时间戳
+    boolean invalid             // 是否失效
+) {
+    static MemoryItem of(userId, type, content, embedding, importance);
+}
+```
+
+#### 4.1.6 PendingState
+
+```java
+public record PendingState(
+    String runId,                  // 运行 ID
+    String memoryId,               // userId:sessionId
+    long assistantMessageId,       // 助手消息 ID
+    String sessionId,              // 会话 ID
+    List<Message> messages,        // 消息列表
+    List<String> confirmedCalls,   // 已确认的工具调用 ID
+    String userId                  // 用户 ID
+) {}
+```
+
+### 4.2 Redis Key 设计
+
+| Key 模式 | 类型 | TTL | 用途 |
+|----------|------|-----|------|
+| `ai:chat:lock:{userId}:{sessionId}` | String | 5s | 会话分布式锁 |
+| `ai:pending:{runId}` | String(JSON) | 10min | 挂起状态 |
+| `ai:memory:{userId}:{memoryId}` | Hash | 90d | 记忆主数据 |
+| `ai:memory:user:{userId}` | Set | 90d | 用户记忆 ID 集合 |
+| `ai:memory:reverse:{memoryId}` | String | 90d | 反向索引（memoryId → userId） |
+| `ai:summary:{hash}` | String | 1h | 摘要缓存 |
+| `idx:ai:memory` | RediSearch Index | - | 向量索引 |
+
+### 4.3 RediSearch 索引 Schema
+
+```
+FT.CREATE idx:ai:memory
+  ON HASH
+  PREFIX 1 ai:memory:
+  SCHEMA
+    userId     TAG
+    type       TAG
+    content    TEXT
+    importance NUMERIC
+    createdAt  NUMERIC
+    updatedAt  NUMERIC
+    invalid    TAG
+    embedding  VECTOR HNSW 6
+                 TYPE FLOAT32
+                 DIM {vectorDim}
+                 DISTANCE_METRIC COSINE
+```
+
+**KNN 查询语句**：
+```
+(@userId:{userId} @invalid:{0})=>[KNN {topK} @embedding $vec AS score]
+  PARAMS 2 vec {float32 bytes}
+  SORTBY score
+  DIALECT 2
+  LIMIT 0 {topK}
 ```
 
 ---
 
-### `LangChain4jLlmClient.java`（逐行注释）
+## 5. 模块详细设计
 
+### 5.1 AiAgentService（对话服务入口）
+
+**职责**：Controller 与 Agent 之间的协调层，管理会话生命周期。
+
+**状态字段**：
 ```java
-package com.lenovo.ai.llm.impl;                                                 // 包声明
-
-import com.fasterxml.jackson.core.type.TypeReference;                           // JSON 类型引用
-import com.fasterxml.jackson.databind.ObjectMapper;                             // JSON 序列化
-import com.lenovo.ai.infra.sse.AiChatSseEmitter;                                // SSE 发射器
-import com.lenovo.ai.llm.LlmClient;                                             // LLM 客户端接口
-import com.lenovo.ai.llm.LlmResponse;                                           // LLM 响应
-import com.lenovo.ai.llm.Message;                                               // 消息模型
-import com.lenovo.ai.llm.enums.MessageRole;                                     // 消息角色枚举
-import com.lenovo.ai.tools.ToolSpec;                                            // 工具描述
-import dev.langchain4j.agent.tool.ToolExecutionRequest;                         // L4j 工具执行请求
-import dev.langchain4j.agent.tool.ToolSpecification;                            // L4j 工具描述
-import dev.langchain4j.data.message.AiMessage;                                  // L4j AI 消息
-import dev.langchain4j.data.message.ChatMessage;                                // L4j 聊天消息
-import dev.langchain4j.data.message.SystemMessage;                              // L4j 系统消息
-import dev.langchain4j.data.message.ToolExecutionResultMessage;                 // L4j 工具结果消息
-import dev.langchain4j.data.message.UserMessage;                                // L4j 用户消息
-import dev.langchain4j.model.chat.ChatModel;                                    // L4j 非流式模型
-import dev.langchain4j.model.chat.StreamingChatModel;                           // L4j 流式模型
-import dev.langchain4j.model.chat.request.ChatRequest;                          // L4j 聊天请求
-import dev.langchain4j.model.chat.request.json.JsonObjectSchema;                // L4j JSON Schema
-import dev.langchain4j.model.chat.response.ChatResponse;                        // L4j 聊天响应
-import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;        // L4j 流式回调
-import lombok.extern.slf4j.Slf4j;                                               // 日志
-import org.springframework.stereotype.Component;                                // Spring 组件
-
-import java.util.ArrayList;                                                     // 数组
-import java.util.HashMap;                                                       // HashMap
-import java.util.List;                                                          // 列表
-import java.util.Map;                                                           // Map
-import java.util.concurrent.CompletableFuture;                                  // 异步任务
-import java.util.concurrent.TimeUnit;                                           // 时间单位
-
-/**                                                                             // Javadoc
- * 基于 LangChain4j 的 LlmClient 实现：真流式输出 + 工具调用。                       // 说明
- */                                                                             // 结束
-@Slf4j                                                                          // 日志
-@Component                                                                      // 注册 Bean
-public class LangChain4jLlmClient implements LlmClient {                        // 实现类
-
-    private static final int STREAM_TIMEOUT_SECONDS = 120;                      // 流式调用超时（秒）
-    private static final ObjectMapper MAPPER = new ObjectMapper();              // 共享 JSON 序列化器
-
-    private final StreamingChatModel streamingModel;                            // 流式模型
-    private final ChatModel chatModel;                                          // 非流式模型
-
-    /**                                                                         // Javadoc
-     * 构造注入两个模型。                                                         // 说明
-     */                                                                         // 结束
-    public LangChain4jLlmClient(StreamingChatModel streamingModel, ChatModel chatModel) { // 构造器
-        this.streamingModel = streamingModel;                                   // 赋值
-        this.chatModel = chatModel;                                             // 赋值
-    }
-
-    @Override                                                                   // 实现接口
-    public LlmResponse chatStream(List<Message> messages, List<ToolSpec> tools, AiChatSseEmitter emitter) { // 流式调用
-        List<ChatMessage> chatMessages = toChatMessages(messages);              // 1. 内部消息 → L4j 消息
-        List<ToolSpecification> toolSpecs = toToolSpecifications(tools);        // 2. 内部工具 → L4j 工具描述
-
-        ChatRequest.Builder requestBuilder = ChatRequest.builder().messages(chatMessages); // 3. 构建请求
-        if (!toolSpecs.isEmpty()) {                                             // 4. 若有工具
-            requestBuilder.toolSpecifications(toolSpecs);                       //    加入工具描述
-        }
-        ChatRequest request = requestBuilder.build();                           // 5. 构建完成
-
-        CompletableFuture<LlmResponse> future = new CompletableFuture<>();      // 6. 异步结果容器
-        StringBuilder fullContent = new StringBuilder();                        // 7. 累积完整内容
-        List<ToolExecutionRequest> toolRequests = new ArrayList<>();            // 8. 累积工具请求
-
-        streamingModel.chat(request, new StreamingChatResponseHandler() {       // 9. 发起流式调用
-            @Override                                                           // 回调：增量
-            public void onPartialResponse(String partialResponse) {             // 增量片段
-                if (partialResponse != null && !partialResponse.isEmpty()) {    //    非空
-                    fullContent.append(partialResponse);                        //    累积
-                    emitter.send("delta", Map.of("text", partialResponse));     //    推送 delta 事件
-                }
-            }
-
-            @Override                                                           // 回调：完成
-            public void onCompleteResponse(ChatResponse completeResponse) {     // 完成响应
-                try {                                                           //    捕获异常
-                    AiMessage aiMessage = completeResponse.aiMessage();         //    取 AI 消息
-                    String content = aiMessage.text();                          //    取文本
-                    if (content != null && !content.isEmpty()) {                //    非空
-                        fullContent.setLength(0);                               //    清空累积
-                        fullContent.append(content);                            //    写入完整内容
-                        emitter.send("done", Map.of("answer", content));        //    推送 done 事件
-                    }
-                    if (aiMessage.hasToolExecutionRequests()) {                 //    有工具请求
-                        toolRequests.addAll(aiMessage.toolExecutionRequests()); //    收集
-                        emitter.send("tool", Map.of("name", "tool_execution")); //    推送 tool 事件
-                    }
-                    future.complete(toLlmResponse(fullContent.toString(), toolRequests)); // 完成 future
-                } catch (Exception e) {                                         //    异常
-                    future.completeExceptionally(e);                            //    异常完成
-                }
-            }
-
-            @Override                                                           // 回调：错误
-            public void onError(Throwable error) {                              // 错误
-                log.error("StreamingChatResponseHandler onError", error);       //    日志
-                emitter.send("error", Map.of("message", error.getMessage()));   //    推送 error
-                future.completeExceptionally(error);                            //    异常完成
-            }
-        });
-
-        try {                                                                   // 10. 等待结果
-            return future.get(STREAM_TIMEOUT_SECONDS, TimeUnit.SECONDS);        //    带超时获取
-        } catch (Exception e) {                                                 //    超时/异常
-            log.error("chatStream 超时或异常", e);                                //    日志
-            return new LlmResponse("", List.of());                              //    返回空响应
-        }
-    }
-
-    @Override                                                                   // 实现接口
-    public String chatSimple(String prompt) {                                   // 非流式简单调用
-        if (prompt == null || prompt.isBlank()) return "";                      // 1. 空入参返回空
-        try {                                                                   // 2. try
-            ChatMessage userMsg = UserMessage.from(prompt);                     //    构造用户消息
-            ChatRequest request = ChatRequest.builder()                         //    构造请求
-                    .messages(List.of(userMsg))                                 //    消息列表
-                    .build();                                                   //    构建
-            ChatResponse response = chatModel.chat(request);                    //    调用模型
-            AiMessage aiMessage = response.aiMessage();                         //    取 AI 消息
-            return aiMessage.text() != null ? aiMessage.text() : "";            //    返回文本
-        } catch (Exception e) {                                                 // 3. 异常
-            log.error("chatSimple 异常: {}", prompt.length(), e);                //    日志
-            return "";                                                          //    返回空
-        }
-    }
-
-    /**                                                                         // Javadoc
-     * 内部消息列表 → L4j ChatMessage 列表。                                       // 说明
-     */                                                                         // 结束
-    private List<ChatMessage> toChatMessages(List<Message> messages) {          // 转换方法
-        List<ChatMessage> result = new ArrayList<>();                           // 结果列表
-        for (Message msg : messages) {                                          // 遍历
-            if (msg.role() == MessageRole.SYSTEM) {                             // SYSTEM
-                result.add(new SystemMessage(msg.content()));                   //    系统消息
-            } else if (msg.role() == MessageRole.USER) {                        // USER
-                result.add(UserMessage.from(msg.content()));                    //    用户消息
-            } else if (msg.role() == MessageRole.ASSISTANT) {                   // ASSISTANT
-                if (msg.toolCalls() != null && !msg.toolCalls().isEmpty()) {    //    有工具调用
-                    List<ToolExecutionRequest> requests = msg.toolCalls().stream() // 映射
-                            .map(ref -> ToolExecutionRequest.builder()          //    构建
-                                    .id(ref.id())                               //    ID
-                                    .name(ref.name())                           //    名称
-                                    .arguments(toJson(ref.args()))              //    参数 JSON
-                                    .build())                                   //    构建
-                            .toList();                                          //    收集
-                    result.add(AiMessage.from(requests));                       //    AI 消息（含工具调用）
-                } else {                                                        //    无工具调用
-                    result.add(AiMessage.from(msg.content()));                  //    AI 文本消息
-                }
-            } else if (msg.role() == MessageRole.TOOL) {                        // TOOL
-                result.add(ToolExecutionResultMessage.from(msg.toolCallId(), null, msg.content())); // 工具结果
-            }
-        }
-        return result;                                                          // 返回
-    }
-
-    /**                                                                         // Javadoc
-     * 内部工具描述 → L4j ToolSpecification。                                      // 说明
-     */                                                                         // 结束
-    @SuppressWarnings("unchecked")                                              // 抑制未检查警告
-    private List<ToolSpecification> toToolSpecifications(List<ToolSpec> tools) {// 转换
-        if (tools == null || tools.isEmpty()) return List.of();                 // 空返回
-        return tools.stream().map(spec -> {                                     // 流式映射
-            JsonObjectSchema.Builder schemaBuilder = JsonObjectSchema.builder();// 构建 Schema
-            Map<String, Object> schema = spec.parameterSchema();                // 取参数 Schema
-            if (schema != null) {                                               // 非空
-                Object propsObj = schema.get("properties");                     // 取 properties
-                if (propsObj instanceof Map<?, ?> properties) {                 // 类型判断
-                    List<String> requiredList = new ArrayList<>();              // required 列表
-                    Object reqObj = schema.get("required");                     // 取 required
-                    if (reqObj instanceof List<?> reqList) {                    // 类型判断
-                        for (Object r : reqList) {                              // 遍历
-                            if (r != null) requiredList.add(String.valueOf(r)); // 添加
-                        }
-                    }
-                    properties.forEach((nameObj, paramObj) -> {                 // 遍历属性
-                        String name = String.valueOf(nameObj);                  // 属性名
-                        if (paramObj instanceof Map<?, ?> rawMap) {             // 类型判断
-                            Map<String, Object> paramMap = (Map<String, Object>) rawMap; // 强转
-                            String type = String.valueOf(paramMap.getOrDefault("type", "string")); // 类型
-                            String desc = String.valueOf(paramMap.getOrDefault("description", "")); // 描述
-                            switch (type) {                                     // 类型分支
-                                case "integer" -> schemaBuilder.addIntegerProperty(name, desc); // 整数
-                                case "number" -> schemaBuilder.addNumberProperty(name, desc);   // 数字
-                                case "boolean" -> schemaBuilder.addBooleanProperty(name, desc); // 布尔
-                                default -> schemaBuilder.addStringProperty(name, desc);         // 字符串
-                            }
-                        }
-                    });
-                    if (!requiredList.isEmpty()) schemaBuilder.required(requiredList); // 设置 required
-                }
-            }
-            return ToolSpecification.builder()                                  // 构建工具描述
-                    .name(spec.name())                                          // 名称
-                    .description(spec.description())                            // 描述
-                    .parameters(schemaBuilder.build())                          // 参数 Schema
-                    .build();                                                   // 构建
-        }).toList();                                                            // 收集
-    }
-
-    /**                                                                         // Javadoc
-     * 内部构造 LlmResponse。                                                     // 说明
-     */                                                                         // 结束
-    private LlmResponse toLlmResponse(String content, List<ToolExecutionRequest> requests) { // 方法
-        if (requests.isEmpty()) {                                               // 无工具调用
-            return new LlmResponse(content, List.of());                         //    返回纯文本
-        }
-        List<LlmResponse.ToolCall> toolCalls = requests.stream().map(req -> {   // 映射工具调用
-            Map<String, Object> args = parseJson(req.arguments());              // 解析参数
-            return new LlmResponse.ToolCall(req.id(), req.name(), args);        // 构造
-        }).toList();                                                            // 收集
-        return new LlmResponse(content, toolCalls);                             // 返回
-    }
-
-    /**                                                                         // Javadoc
-     * Map → JSON 字符串。                                                       // 说明
-     */                                                                         // 结束
-    private String toJson(Map<String, Object> map) {                            // 方法
-        if (map == null || map.isEmpty()) return "{}";                          // 空返回 {}
-        try {                                                                   // try
-            return MAPPER.writeValueAsString(map);                              // 序列化
-        } catch (Exception e) {                                                 // 异常
-            log.warn("toJson failed", e);                                       //    日志
-            return "{}";                                                        //    返回 {}
-        }
-    }
-
-    /**                                                                         // Javadoc
-     * JSON 字符串 → Map。                                                       // 说明
-     */                                                                         // 结束
-    private Map<String, Object> parseJson(String json) {                        // 方法
-        if (json == null || json.isBlank()) return Map.of();                    // 空返回
-        try {                                                                   // try
-            return MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}); // 反序列化
-        } catch (Exception e) {                                                 // 异常
-            log.warn("parseJson failed: {}", json, e);                          //    日志
-            return Map.of();                                                    //    返回空
-        }
-    }
-}
+Map<String, AiChatSseEmitter> runningEmitters;    // memoryId → SSE
+Map<String, String> runningRunIds;                // memoryId → runId
+Map<String, String> runningTokens;                // memoryId → 锁 token
+Map<String, String> runningRequestIds;            // memoryId → clientRequestId
 ```
 
----
+**chat() 方法流程**：
+1. **清理旧状态**（顺序敏感！）
+    - 先取 `oldToken` 并 `forceUnlock`（避免 `onCompletion` 提前清理 token）
+    - 再关闭旧 `emitter`
+2. **注册新状态**（emitter / token / runId / requestId）
+3. **加锁**：`tryLock(lockKey, token, 5000L)`
+    - 失败：清理状态、返回错误 SSE
+4. **会话初始化**：
+    - `newSession = !history.exists(sessionId)`
+    - 非新会话：`history.assertOwner(sessionId, userId)`
+    - `AiToolContext.capture(userId, redisUtils)`：从 Redis 读角色
+    - 分配 `userMessageId` / `assistantMessageId`
+5. **注册生命周期回调**：
+    - `onCompletion`：清理四个 Map
+    - `onTimeout`：关闭 emitter、清理 requestId、释放锁
+6. **提交线程池**：`chatExecutor.execute(() -> runner.run(...))`
 
-### `AiAgentService.java`（逐行注释）
+**stop() 方法流程**：
+1. 校验参数
+2. 比对 `clientRequestId`（不匹配则跳过，防止误停新请求）
+3. 关闭 emitter（发送替换通知 + complete）
+4. 释放 Redis 锁
+5. 清理状态
 
+**关键设计点**：
+- **清理顺序**：`forceUnlock` 必须在 `emitter.complete()` 之前，否则 `onCompletion` 回调会提前清理 token，导致无法释放锁
+- **requestId 匹配**：防止旧请求的 stop 误停新请求
+- **回调幂等**：`AiChatSseEmitter.complete()` 内部 CAS 保证幂等
+
+### 5.2 AiAgentRunner（运行编排）
+
+**职责**：串联「落库 → 记忆召回 → 上下文构建 → 系统提示注入 → AgentLoop → 记忆抽取」全流程。
+
+**run() 方法流程**：
 ```java
-package com.lenovo.ai.service;                                                  // 包声明
-
-import com.lenovo.ai.agent.AiAgentRunner;                                       // Agent 运行器
-import com.lenovo.ai.agent.runtime.AiChatExecutor;                              // AI 专用线程池
-import com.lenovo.ai.infra.history.ChatHistoryStore;                            // 历史存储
-import com.lenovo.ai.infra.lock.RedisLockHelper;                                // Redis 锁
-import com.lenovo.ai.infra.sse.AiChatSseEmitter;                                // SSE 发射器
-import com.lenovo.ai.tools.context.AiToolContext;                               // 工具上下文
-import com.lenovo.controller.ai.AiAgentController.ChatRequest;                  // 请求体
-import com.lenovo.util.RedisUtils;                                              // Redis 工具
-import lombok.extern.slf4j.Slf4j;                                               // 日志
-import org.springframework.context.i18n.LocaleContextHolder;                    // 国际化上下文
-import org.springframework.stereotype.Service;                                  // Spring 服务
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;        // SSE 基类
-
-import java.util.Locale;                                                        // 语言
-import java.util.Map;                                                           // Map
-import java.util.UUID;                                                          // UUID
-import java.util.concurrent.ConcurrentHashMap;                                  // 并发 Map
-
-@Slf4j                                                                          // 日志
-@Service                                                                        // 注册服务
-public class AiAgentService {                                                   // 对话服务入口
-
-    private final ChatHistoryStore history;                                     // 历史存储
-    private final RedisLockHelper redisLockHelper;                              // 锁工具
-    private final RedisUtils redisUtils;                                        // Redis 工具
-    private final AiChatExecutor chatExecutor;                                  // AI 线程池
-    private final AiAgentRunner runner;                                         // Agent 运行器
-
-    private final Map<String, AiChatSseEmitter> runningEmitters = new ConcurrentHashMap<>(); // memoryId → 当前 emitter
-    private final Map<String, String> runningRunIds = new ConcurrentHashMap<>();             // memoryId → runId
-    private final Map<String, String> runningTokens = new ConcurrentHashMap<>();             // memoryId → 锁 token
-    private final Map<String, String> runningRequestIds = new ConcurrentHashMap<>();         // memoryId → 客户端请求 ID
-
-    /**                                                                         // Javadoc
-     * 构造注入。                                                                 // 说明
-     */                                                                         // 结束
-    public AiAgentService(ChatHistoryStore history,                             // 构造器
-                          RedisLockHelper redisLockHelper,
-                          RedisUtils redisUtils,
-                          AiChatExecutor chatExecutor,
-                          AiAgentRunner runner) {
-        this.history = history;                                                 // 赋值
-        this.redisLockHelper = redisLockHelper;                                 // 赋值
-        this.redisUtils = redisUtils;                                           // 赋值
-        this.chatExecutor = chatExecutor;                                       // 赋值
-        this.runner = runner;                                                   // 赋值
-    }
-
-    /**                                                                         // Javadoc
-     * 对话入口：创建 SSE，注册状态，加锁，提交线程池。                             // 说明
-     */                                                                         // 结束
-    public SseEmitter chat(ChatRequest request, String userId) {                // 方法
-        Locale locale = LocaleContextHolder.getLocale();                        // 1. 取当前语言
-        String sessionId = request.sessionId();                                 // 2. 取 sessionId
-        String memoryId = userId + ":" + sessionId;                             // 3. 构造 memoryId（用户+会话唯一键）
-        String lockKey = "ai:chat:lock:" + memoryId;                            // 4. 构造锁 key
-        String token = UUID.randomUUID().toString();                            // 5. 生成本次锁 token
-        String newRunId = UUID.randomUUID().toString();                         // 6. 生成本次 runId
-        String requestId = (request.clientRequestId() != null && !request.clientRequestId().isBlank()) // 7. 客户端请求 ID
-                ? request.clientRequestId()                                     //    有则用
-                : UUID.randomUUID().toString();                                 //    无则生成
-
-        AiChatSseEmitter emitter = new AiChatSseEmitter();                      // 8. 创建 SSE 发射器
-
-        try {                                                                   // 9. 主流程
-            // 1. 清理旧状态（先取 token、forceUnlock，再关闭旧 emitter，避免 onCompletion 提前清 token） // 注释
-            String oldToken = runningTokens.remove(memoryId);                   // 9.1 取旧 token 并移除
-            if (oldToken != null) {                                             //    旧 token 存在
-                redisLockHelper.forceUnlock(lockKey);                           //    强制释放旧锁
-                log.info(">>> 强制释放旧 Redis 锁: lockKey={}, oldToken={}", lockKey, oldToken); // 日志
-            }
-
-            AiChatSseEmitter oldEmitter = runningEmitters.remove(memoryId);     // 9.2 取旧 emitter 并移除
-            if (oldEmitter != null && !oldEmitter.isClosed()) {                 //    旧 emitter 存在且未关闭
-                try {                                                           //    try
-                    oldEmitter.send("error", Map.of("message", "会话已被新请求替换")); //    发送替换通知
-                    oldEmitter.complete();                                      //    关闭
-                    log.info(">>> 已关闭旧 emitter: memoryId={}", memoryId);      //    日志
-                } catch (Exception e) {                                         //    异常
-                    log.warn("关闭旧 emitter 异常: memoryId={}", memoryId, e);    //    日志
-                }
-            }
-
-            // 2. 注册当前请求状态                                             // 注释
-            runningEmitters.put(memoryId, emitter);                             // 9.3 注册 emitter
-            runningTokens.put(memoryId, token);                                 //    注册 token
-            runningRunIds.put(memoryId, newRunId);                              //    注册 runId
-            runningRequestIds.put(memoryId, requestId);                         //    注册 requestId
-
-            // 3. 获取锁                                                       // 注释
-            boolean locked = redisLockHelper.tryLock(lockKey, token, 5_000L);   // 9.4 尝试加锁（5s TTL）
-            if (!locked) {                                                      //    加锁失败
-                log.error(">>> 锁冲突，关闭新请求: memoryId={}, oldToken={}", memoryId, oldToken); // 日志
-                runningEmitters.remove(memoryId, emitter);                      //    清理状态
-                runningTokens.remove(memoryId, token);                          //    清理
-                runningRunIds.remove(memoryId, newRunId);                       //    清理
-                runningRequestIds.remove(memoryId, requestId);                  //    清理
-                try {                                                           //    try
-                    emitter.send(SseEmitter.event().name("error")               //    发送 error
-                            .data(Map.of("message", "上一次请求尚未完成，请稍后再试"))); //    消息
-                } catch (Exception ignored) {}                                  //    忽略
-                emitter.complete();                                             //    关闭
-                return emitter;                                                 //    返回
-            }
-            log.info(">>> 成功获取锁: memoryId={}, requestId={}", memoryId, requestId); // 9.5 日志
-
-            // 4. 会话初始化                                                   // 注释
-            boolean newSession = !history.exists(sessionId);                    // 9.6 判断是否新会话
-            if (!newSession) history.assertOwner(sessionId, userId);            //    非新会话校验 owner
-
-            // ✅ 注意：AiToolContext.capture 需要 3 个参数（userId, roles, redisUtils） // 注释
-            // 如果你没有 RoleUtils 字段，请检查 AiToolContext 的签名                  // 注释
-            AiToolContext context = AiToolContext.capture(userId, redisUtils);  // 9.7 构造工具上下文
-            long userMessageId = history.nextMessageId();                       // 9.8 分配 user 消息 ID
-            long assistantMessageId = history.nextMessageId();                  //    分配 assistant 消息 ID
-
-            // 5. 注册生命周期回调                                              // 注释
-            emitter.onCompletion(() -> {                                        // 9.9 完成回调
-                runningEmitters.remove(memoryId, emitter);                      //    清理 emitter
-                runningRunIds.remove(memoryId, newRunId);                       //    清理 runId
-                runningTokens.remove(memoryId, token);                          //    清理 token
-                runningRequestIds.remove(memoryId, requestId);                  //    清理 requestId
-            });
-            emitter.onTimeout(() -> {                                           // 9.10 超时回调
-                try { emitter.complete(); } catch (Exception ignored) {}        //    关闭
-                runningRequestIds.remove(memoryId);                             //    清理 requestId
-                redisLockHelper.unlock(lockKey, token);                         //    释放锁
-            });
-
-            // 6. 提交任务                                                     // 注释
-            chatExecutor.execute(() -> runner.run(                              // 9.11 提交线程池
-                    request, context, userId, newSession, sessionId,            //    参数
-                    userMessageId, assistantMessageId, locale,                  //    参数
-                    memoryId, lockKey, token, emitter, newRunId));              //    参数
-
-            return emitter;                                                     // 9.12 返回 emitter
-
-        } catch (Exception e) {                                                 // 10. 入口异常
-            log.error("chat() 入口异常", e);                                     //    日志
-            try {                                                               //    try
-                emitter.send(SseEmitter.event().name("error")                   //    发送 error
-                        .data(Map.of("message", "系统繁忙，请稍后再试")));         //    消息
-            } catch (Exception ignored) {}                                      //    忽略
-            emitter.complete();                                                 //    关闭
-            return emitter;                                                     //    返回
-        }
-    }
-
-    /**                                                                         // Javadoc
-     * 停止指定会话。                                                             // 说明
-     */                                                                         // 结束
-    public void stop(String sessionId, String userId, String clientRequestId) { // 方法
-        if (sessionId == null || sessionId.isBlank() || userId == null) return; // 1. 参数校验
-        String memoryId = userId + ":" + sessionId;                             // 2. 构造 memoryId
-        log.info(">>> 停止会话: memoryId={}, clientRequestId={}", memoryId, clientRequestId); // 3. 日志
-
-        String storedRequestId = runningRequestIds.get(memoryId);               // 4. 取存储的 requestId
-        if (clientRequestId != null && !clientRequestId.isBlank()) {            // 5. 若客户端传了 requestId
-            boolean requestIdMatches = clientRequestId.equals(storedRequestId); //    比对
-            if (!requestIdMatches) {                                            //    不匹配
-                log.info("stop() clientRequestId 不匹配，跳过关闭: stored={}, requested={}", // 日志
-                        storedRequestId, clientRequestId);
-                return;                                                         //    直接返回
-            }
-        }
-
-        AiChatSseEmitter emitter = runningEmitters.remove(memoryId);            // 6. 取 emitter 并移除
-        if (emitter != null) {                                                  //    存在
-            try {                                                               //    try
-                if (!emitter.isClosed()) {                                      //    未关闭
-                    emitter.send("error", Map.of("message", "会话已被新的请求替换")); //    发送通知
-                    emitter.complete();                                         //    关闭
-                    log.info(">>> 已关闭 emitter: memoryId={}", memoryId);        //    日志
-                }
-            } catch (Exception e) {                                             //    异常
-                log.warn("关闭 emitter 异常: memoryId={}", memoryId, e);          //    日志
-            }
-        } else {                                                                //    不存在
-            log.info("stop() emitter 已不存在, memoryId={}", memoryId);          //    日志
-        }
-        runningRequestIds.remove(memoryId);                                     // 7. 清理 requestId
-
-        String token = runningTokens.remove(memoryId);                          // 8. 取 token 并移除
-        if (token != null) {                                                    //    存在
-            String lockKey = "ai:chat:lock:" + memoryId;                        //    构造锁 key
-            try {                                                               //    try
-                redisLockHelper.unlock(lockKey, token);                         //    释放锁
-                log.info("<<< 释放 Redis 锁: lockKey={}", lockKey);              //    日志
-            } catch (Exception e) {                                             //    异常
-                log.error("释放 Redis 锁失败: {}", lockKey, e);                   //    日志
-            }
-        }
-
-        runningRunIds.remove(memoryId);                                         // 9. 清理 runId
-    }
-}
-```
-
----
-
-### `RedisMemoryStore.java`（核心方法逐行注释，节选）
-
-```java
-@Override                                                                       // 实现接口
-public void save(MemoryItem item) {                                             // 保存记忆
-    String key = key(item.userId(), item.id());                                 // 1. 构造主键
-    byte[] keyBytes = b(key);                                                   //    转字节
-    byte[] embeddingBytes = toFloatBytes(item.embedding());                     // 2. 向量转 float32 字节
-
-    // 1. 主数据：原生 Lettuce 写 Hash                                         // 注释
-    try {                                                                       // 3. try
-        if (nativeConnection != null) {                                         //    单机连接
-            RedisCommands<byte[], byte[]> cmd = nativeConnection.sync();        //    同步命令
-            writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);//    写字段
-            cmd.expire(keyBytes, TTL_SECONDS);                                  //    设置 TTL
-        } else if (nativeClusterConnection != null) {                           //    集群连接
-            RedisAdvancedClusterCommands<byte[], byte[]> cmd = nativeClusterConnection.sync(); // 同步
-            writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);//    写字段
-            cmd.expire(keyBytes, TTL_SECONDS);                                  //    设置 TTL
-        } else {                                                                //    未初始化
-            log.warn(">>> save: 原生连接未初始化");                              //    日志
-            return;                                                             //    返回
-        }
-    } catch (Exception e) {                                                     // 4. 异常
-        log.error(">>> 保存记忆主数据失败, key={}", key, e);                      //    日志
-        return;                                                                 //    返回
-    }
-
-    // 2. 辅助索引：StringRedisTemplate，纯字符串                               // 注释
-    try {                                                                       // 5. try
-        String userSetKey = USER_SET_PREFIX + item.userId();                    //    用户集合 key
-        String reverseKey = REVERSE_PREFIX + item.id();                         //    反向索引 key
-
-        stringRedisTemplate.opsForSet().add(userSetKey, item.id());             //    加入用户集合
-        stringRedisTemplate.expire(userSetKey, TTL_SECONDS, TimeUnit.SECONDS);  //    设置 TTL
-
-        stringRedisTemplate.opsForValue().set(reverseKey, item.userId(), TTL_SECONDS, TimeUnit.SECONDS); // 写反向索引
-    } catch (Exception e) {                                                     // 6. 异常
-        log.error(">>> 保存记忆辅助索引失败, userId={}, id={}", item.userId(), item.id(), e); // 日志
-    }
-}
-```
-
-```java
-@Override                                                                       // 实现接口
-public List<MemoryItem> searchByUser(String userId, List<Double> queryEmbedding, int topK) { // KNN 检索
-    if (queryEmbedding == null || queryEmbedding.isEmpty()) {                   // 1. 向量空
-        log.warn(">>> 向量召回跳过：queryEmbedding 为空, userId={}", userId);     //    日志
-        return List.of();                                                       //    返回空
-    }
-    if (queryEmbedding.size() != vectorDim) {                                   // 2. 维度不符
-        log.warn(">>> 向量召回跳过：维度不符, 期望={}, 实际={}", vectorDim, queryEmbedding.size()); // 日志
-        return List.of();                                                       //    返回空
-    }
-
-    byte[] qBytes = toFloatBytes(queryEmbedding);                               // 3. 向量转字节
-    String query = String.format(                                               // 4. 构造查询
-            "(@userId:{%s} @invalid:{0})=>[KNN %d @embedding $vec AS score]",   //    TAG 过滤 + KNN
-            escapeTag(userId), topK                                             //    用户 ID 转义 + topK
+try {
+    // 1. 落库 user 消息
+    history.appendUser(userMessageId, sessionId, userId, request.message());
+    
+    // 2. 长期记忆召回
+    List<Double> qVec = embeddingClient.embed(request.message());
+    List<MemoryItem> memories = memoryStore.searchByUser(userId, qVec, 5);
+    String memoryBlock = memories.stream()
+        .map(m -> "- " + m.content())
+        .collect(Collectors.joining("\n"));
+    
+    // 3. 构建上下文（历史 + 记忆）
+    List<Message> messages = contextBuilder.build(sessionId, request.message(), memoryBlock);
+    
+    // 4. 注入系统提示词（最前面）
+    messages.add(0, Message.system("""
+        你是一个企业智能助手，必须严格遵守以下规则：
+        1. 优先使用工具：业务数据、制度、流程、待办、审批等问题必须调用 query_knowledge
+        2. 基于检索结果作答：工具返回结果是唯一可信来源
+        3. 知识库 ID 规则：除非用户明确给出 13 位以上纯数字，否则不传 knowledgeBaseId
+        4. 答案格式：先直接回答，再引用具体内容
+        5. 审核/审批相关问题：必须调用知识库工具
+        如果用户问题与业务无关，可以直接回答。
+        """));
+    
+    // 5. 构造上下文并运行
+    AgentContext ctx = new AgentContext(messages, toolContext, emitter, sessionId,
+        assistantMessageId, runId, memoryId);
+    agentLoop.run(ctx);
+    
+    // 6. 异步抽取长期记忆
+    List<Message> turn = List.of(
+        Message.user(request.message()),
+        Message.assistant(history.loadAssistant(assistantMessageId))
     );
+    memoryExtractor.extract(userId, turn);
+    
+} catch (Exception e) {
+    log.error("AiAgentRunner 异常，runId={}", runId, e);
+} finally {
+    // 只释放自己持有的锁（Lua 比对 token）
+    redisLockHelper.unlock(lockKey, token);
+}
+```
 
-    try {                                                                       // 5. try
-        List<byte[]> args = new ArrayList<>();                                  //    参数列表
-        args.add(b("FT.SEARCH"));                                               //    命令
-        args.add(b(INDEX_NAME));                                                //    索引名
-        args.add(b(query));                                                     //    查询
-        args.add(b("PARAMS"));   args.add(b("2"));                              //    PARAMS 2
-        args.add(b("vec"));      args.add(qBytes);                              //    参数 vec
-        args.add(b("SORTBY"));   args.add(b("score"));                          //    排序
-        args.add(b("DIALECT"));  args.add(b("2"));                              //    DIALECT 2
-        args.add(b("LIMIT"));    args.add(b("0")); args.add(b(String.valueOf(topK))); // LIMIT
+**关键设计点**：
+- **系统提示注入**：在消息列表最前面插入，确保 LLM 优先看到规则
+- **记忆召回失败降级**：`embeddingClient.embed` 抛异常时会被 catch 捕获，不影响主流程（但会丢失记忆召回）
+- **锁释放保证**：`finally` 中释放，即使异常也能释放
+- **记忆抽取异步**：不阻塞主流程
 
-        Object raw = dispatch("FT.SEARCH", args, OutputType.NESTED);            //    派发命令
-        return parseSearchResult(raw);                                          //    解析结果
-    } catch (Exception e) {                                                     // 6. 异常
-        log.error(">>> 向量召回失败, userId={}", userId, e);                      //    日志
-        return List.of();                                                       //    返回空
+### 5.3 AgentLoop（Agent 主循环）
+
+**职责**：ReAct 风格循环，最多 8 步，每步调用 LLM，若有工具调用则执行并回填。
+
+**run() 方法流程**：
+```java
+try {
+    List<Message> messages = new ArrayList<>(ctx.messages());
+    List<ToolSpec> tools = toolRegistry.availableTools(ctx.toolContext());
+    
+    for (int step = 0; step < MAX_STEPS; step++) {
+        // 1. SSE 关闭检测
+        if (ctx.emitter().isClosed()) return;
+        
+        // 2. 调用 LLM（流式）
+        LlmResponse resp = llmClient.chatStream(messages, tools, ctx.emitter());
+        
+        // 3. 无工具调用 → 最终答案
+        if (!resp.hasToolCalls()) {
+            history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), resp.content());
+            sendEvent(ctx.emitter(), "done", Map.of("messageId", ctx.assistantMessageId()));
+            ctx.emitter().complete();
+            return;
+        }
+        
+        // 4. 有工具调用：转换格式并加入消息列表
+        List<Message.ToolCallRef> refs = resp.toolCalls().stream()
+            .map(tc -> new Message.ToolCallRef(tc.id(), tc.name(), tc.args()))
+            .toList();
+        messages.add(Message.assistantWithTools(resp.content(), refs));
+        
+        // 5. 逐个执行工具
+        for (LlmResponse.ToolCall call : resp.toolCalls()) {
+            AiTool tool = toolRegistry.get(call.name());
+            
+            // 5.1 工具不存在
+            if (tool == null) {
+                messages.add(Message.toolResult(call.id(), "工具不存在: " + call.name()));
+                continue;
+            }
+            
+            // 5.2 权限二次校验
+            if (!toolRegistry.isAllowed(call.name(), ctx.toolContext())) {
+                messages.add(Message.toolResult(call.id(), "无权限调用该工具"));
+                sendEvent(ctx.emitter(), "tool", Map.of("name", call.name(), "status", "denied"));
+                continue;
+            }
+            
+            // 5.3 需确认工具
+            if (tool.requiresConfirmation() && !ctx.confirmed(call.id())) {
+                replaceMessages(ctx.messages(), messages);
+                pendingStateStore.save(ctx);
+                sendEvent(ctx.emitter(), "tool_confirm", Map.of(
+                    "callId", call.id(), "tool", call.name(), "args", call.args()));
+                ctx.emitter().complete();
+                return;
+            }
+            
+            // 5.4 执行工具
+            sendEvent(ctx.emitter(), "tool", Map.of(
+                "name", call.name(), "args", call.args(), "status", "executing"));
+            ToolResult result = executeWithGuard(tool, call, ctx);
+            sendEvent(ctx.emitter(), "tool", Map.of(
+                "name", call.name(), "args", call.args(),
+                "status", result.success() ? "completed" : "failed",
+                "result", result.content()));
+            messages.add(Message.toolResult(call.id(), result.content()));
+        }
+    }
+    
+    // 6. 达到最大步数
+    history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), "[已达到最大工具调用步数]");
+    sendEvent(ctx.emitter(), "done", Map.of("messageId", ctx.assistantMessageId()));
+    ctx.emitter().complete();
+    
+} catch (Exception e) {
+    log.error("AgentLoop 异常, runId={}", ctx.runId(), e);
+    try {
+        sendEvent(ctx.emitter(), "error", Map.of(
+            "code", "INTERNAL_ERROR", "message", "处理失败: " + e.getMessage()));
+    } catch (Exception ignored) {}
+    try { ctx.emitter().complete(); } catch (Exception ignored) {}
+}
+```
+
+**executeWithGuard() 工具执行保护**：
+```java
+private ToolResult executeWithGuard(AiTool tool, LlmResponse.ToolCall call, AgentContext ctx) {
+    try {
+        return CompletableFuture.supplyAsync(() -> {
+            AiToolContext.set(ctx.toolContext());  // 设置 ThreadLocal
+            try {
+                return tool.execute(call.args(), ctx.toolContext());
+            } finally {
+                AiToolContext.clear();  // 必须清理，防止线程池污染
+            }
+        })
+        .orTimeout(TOOL_TIMEOUT_SECONDS, TimeUnit.SECONDS)  // 30s 超时
+        .exceptionally(e -> {
+            log.error("工具执行异常: {}", tool.name(), e);
+            return ToolResult.fail("工具执行失败: " + e.getMessage());
+        })
+        .join();
+    } catch (Exception e) {
+        log.error("工具提交失败: {}", tool.name(), e);
+        return ToolResult.fail("工具执行失败: " + e.getMessage());
     }
 }
 ```
 
----
+**关键设计点**：
+- **MAX_STEPS = 8**：防止无限循环
+- **TOOL_TIMEOUT = 30s**：防止工具阻塞
+- **SSE 关闭检测**：每步开始检查，及时退出
+- **ThreadLocal 清理**：`finally` 保证
+- **需确认工具**：挂起状态存 Redis，发 `tool_confirm` 事件后退出
 
-### `KnowledgeRouter.java`（核心方法逐行注释，节选）
+### 5.4 LangChain4jLlmClient（LLM 客户端）
 
+**职责**：封装 LangChain4j，提供流式和非流式调用。
+
+**chatStream() 流程**：
 ```java
-@PostConstruct                                                                  // 初始化
-public void init() {                                                            // 方法
-    long interval = Math.max(1L, refreshMinutes);                               // 1. 取刷新间隔（至少 1 分钟）
-    // 不在启动线程里做远程调用：预热失败也不影响应用启动，后续定时任务会继续自愈 // 注释
-    refresher.scheduleWithFixedDelay(this::refreshQuietly, 0L, interval, TimeUnit.MINUTES); // 2. 定时刷新（首次立即）
-    log.info(">>> KnowledgeRouter 已启动后台向量刷新，间隔 {} 分钟", interval);   // 3. 日志
-}
-```
-
-```java
-private boolean refresh() {                                                     // 刷新向量
-    if (!refreshing.compareAndSet(false, true)) {                               // 1. CAS 互斥
-        return false;                                                           //    已有线程在刷新
-    }
-    lastAttemptAt = System.currentTimeMillis();                                 // 2. 记录尝试时间
-    try {                                                                       // 3. try
-        List<Long> kbIds = getAllKnowledgeBaseIds();                            //    取所有知识库 ID
-        int success = 0;                                                        //    成功计数
-        for (Long kbId : kbIds) {                                               //    遍历
-            try {                                                               //    try
-                String desc = buildDescription(kbId);                           //    构建描述
-                if (desc == null || desc.isBlank()) continue;                   //    跳过空
-                if (desc.length() > MAX_DESC_LENGTH) desc = desc.substring(0, MAX_DESC_LENGTH); // 截断
-                float[] vec = embeddingModel.embed(desc).content().vector();    //    向量化
-                kbVectors.put(kbId, vec);                                       //    缓存向量
-                kbDescriptions.put(kbId, desc);                                 //    缓存描述
-                success++;                                                      //    计数
-                log.debug(">>> 知识库 {} 描述向量已生成，维度：{}", kbId, vec.length); // 日志
-            } catch (Exception e) {                                             //    单库失败
-                log.warn(">>> 知识库 {} 描述向量生成失败，将在下次刷新时重试", kbId, e); // 日志
+public LlmResponse chatStream(List<Message> messages, List<ToolSpec> tools, AiChatSseEmitter emitter) {
+    // 1. 格式转换
+    List<ChatMessage> chatMessages = toChatMessages(messages);
+    List<ToolSpecification> toolSpecs = toToolSpecifications(tools);
+    
+    // 2. 构建请求
+    ChatRequest.Builder requestBuilder = ChatRequest.builder().messages(chatMessages);
+    if (!toolSpecs.isEmpty()) requestBuilder.toolSpecifications(toolSpecs);
+    ChatRequest request = requestBuilder.build();
+    
+    // 3. 异步结果容器
+    CompletableFuture<LlmResponse> future = new CompletableFuture<>();
+    StringBuilder fullContent = new StringBuilder();
+    List<ToolExecutionRequest> toolRequests = new ArrayList<>();
+    
+    // 4. 流式调用
+    streamingModel.chat(request, new StreamingChatResponseHandler() {
+        @Override
+        public void onPartialResponse(String partialResponse) {
+            if (partialResponse != null && !partialResponse.isEmpty()) {
+                fullContent.append(partialResponse);
+                emitter.send("delta", Map.of("text", partialResponse));
             }
         }
-        log.info(">>> KnowledgeRouter 刷新完成，本次成功 {} / 共 {} 个知识库，当前缓存 {} 个", // 汇总日志
-                success, kbIds.size(), kbVectors.size());
-        return true;                                                            //    返回成功
-    } finally {                                                                 // 4. finally
-        refreshing.set(false);                                                  //    释放互斥
-    }
-}
-```
-
-```java
-public Long route(String question) {                                            // 路由
-    if (question == null || question.isBlank()) return null;                    // 1. 空返回
-    ensureReady();                                                              // 2. 兜底重建
-    if (kbVectors.isEmpty()) {                                                  // 3. 缓存空
-        log.warn(">>> 知识库向量缓存为空，跳过路由，将由调用方走默认知识库");       //    日志
-        return null;                                                            //    返回 null
-    }
-    float[] questionVec = embeddingModel.embed(question).content().vector();    // 4. 问题向量化
-
-    Long bestKbId = null;                                                       // 5. 最佳 ID
-    double bestScore = -1;                                                      //    最佳分数
-    for (Map.Entry<Long, float[]> entry : kbVectors.entrySet()) {               // 6. 遍历
-        double score = cosine(questionVec, entry.getValue());                   //    余弦相似度
-        if (score > bestScore) {                                                //    更高
-            bestScore = score;                                                  //    更新
-            bestKbId = entry.getKey();                                          //    更新
-        }
-    }
-
-    log.info(">>> 路由结果：knowledgeBaseId={}, score={}", bestKbId, bestScore);// 7. 日志
-    if (bestScore < MIN_SCORE) {                                                // 8. 低于阈值
-        log.warn(">>> 路由相似度低于阈值 {}，不选知识库", MIN_SCORE);             //    日志
-        return null;                                                            //    返回 null
-    }
-    return bestKbId;                                                            // 9. 返回最佳
-}
-```
-
----
-
-### `AiChatSseEmitter.java`（逐行注释）
-
-```java
-package com.lenovo.ai.infra.sse;                                                // 包声明
-
-import lombok.extern.slf4j.Slf4j;                                               // 日志
-import org.springframework.http.MediaType;                                      // 媒体类型
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;        // SSE 基类
-
-import java.io.IOException;                                                     // IO 异常
-import java.util.concurrent.atomic.AtomicBoolean;                               // 原子布尔
-
-@Slf4j                                                                          // 日志
-public class AiChatSseEmitter extends SseEmitter {                              // SSE 封装
-
-    /** 连接是否已关闭 */                                                        // 注释
-    private final AtomicBoolean closed = new AtomicBoolean(false);              // 关闭标志（原子）
-
-    /** 关闭时的回调，由 runner 注册，用于立即停止 LLM 流 */                        // 注释
-    private volatile Runnable onCloseCallback;                                  // 关闭回调
-
-    /**                                                                         // Javadoc
-     * 构造：5 分钟超时，注册完成/超时回调。                                       // 说明
-     */                                                                         // 结束
-    public AiChatSseEmitter() {                                                 // 构造器
-        super(300_000L);   // 5 分钟                                            // 超时 5 分钟
-
-        // SseEmitter 生命周期结束（客户端断开、超时、服务端 complete）都会触发   // 注释
-        super.onCompletion(() -> {                                              // 完成回调
-            closed.set(true);                                                   //    标记关闭
-            Runnable cb = onCloseCallback;                                      //    取回调
-            if (cb != null) {                                                   //    存在
-                try { cb.run(); } catch (Exception ignored) {}                  //    执行（忽略异常）
+        
+        @Override
+        public void onCompleteResponse(ChatResponse completeResponse) {
+            try {
+                AiMessage aiMessage = completeResponse.aiMessage();
+                String content = aiMessage.text();
+                if (content != null && !content.isEmpty()) {
+                    fullContent.setLength(0);
+                    fullContent.append(content);
+                    emitter.send("done", Map.of("answer", content));
+                }
+                if (aiMessage.hasToolExecutionRequests()) {
+                    toolRequests.addAll(aiMessage.toolExecutionRequests());
+                    emitter.send("tool", Map.of("name", "tool_execution"));
+                }
+                future.complete(toLlmResponse(fullContent.toString(), toolRequests));
+            } catch (Exception e) {
+                future.completeExceptionally(e);
             }
+        }
+        
+        @Override
+        public void onError(Throwable error) {
+            log.error("StreamingChatResponseHandler onError", error);
+            emitter.send("error", Map.of("message", error.getMessage()));
+            future.completeExceptionally(error);
+        }
+    });
+    
+    // 5. 等待结果（120s 超时）
+    try {
+        return future.get(STREAM_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    } catch (Exception e) {
+        log.error("chatStream 超时或异常", e);
+        return new LlmResponse("", List.of());
+    }
+}
+```
+
+**toChatMessages() 转换规则**：
+| 内部 role | 条件 | 转换为 L4j |
+|-----------|------|-----------|
+| SYSTEM | - | `SystemMessage` |
+| USER | - | `UserMessage` |
+| ASSISTANT | 有 toolCalls | `AiMessage.from(List<ToolExecutionRequest>)` |
+| ASSISTANT | 无 toolCalls | `AiMessage.from(content)` |
+| TOOL | - | `ToolExecutionResultMessage.from(callId, null, content)` |
+
+**toToolSpecifications() 转换规则**：
+- 将内部 `parameterSchema`（JSON Schema）转为 L4j `JsonObjectSchema`
+- 支持类型：`string` / `integer` / `number` / `boolean`
+- 支持 `required` 字段
+
+**关键设计点**：
+- **流式回调**：`onPartialResponse` 推送 delta 事件
+- **完整内容覆盖**：`onCompleteResponse` 中 `fullContent.setLength(0)` 用完整内容覆盖（防止增量与完整不一致）
+- **工具请求收集**：`aiMessage.toolExecutionRequests()`
+- **超时兜底**：120s 后返回空响应
+
+### 5.5 ContextBuilder（上下文构建）
+
+**职责**：加载历史 + 注入记忆 + 摘要压缩 + 字符预算裁剪。
+
+**build() 流程**：
+```java
+public List<Message> build(String sessionId, String newUserMsg, String longTermMemoryBlock) {
+    // 1. 加载历史
+    List<Message> stored = history.load(sessionId);
+    List<Message> systemMsgs = stored.stream().filter(Message::isSystem).toList();
+    List<Message> dialog = stored.stream().filter(m -> !m.isSystem()).toList();
+    
+    List<Message> result = new ArrayList<>(systemMsgs);
+    
+    // 2. 注入长期记忆
+    if (longTermMemoryBlock != null && !longTermMemoryBlock.isBlank()) {
+        result.add(Message.system("[关于用户的已知信息]\n" + longTermMemoryBlock));
+    }
+    
+    // 3. 摘要压缩
+    if (dialog.size() <= KEEP_RECENT_TURNS * 2) {  // 6 轮 = 12 条
+        result.addAll(dialog);
+    } else {
+        int splitIdx = dialog.size() - KEEP_RECENT_TURNS * 2;
+        List<Message> old = dialog.subList(0, splitIdx);
+        List<Message> recent = dialog.subList(splitIdx, dialog.size());
+        result.add(Message.system("[历史对话摘要]\n" + summaryUtil.summarize(old)));
+        result.addAll(recent);
+    }
+    
+    // 4. 追加本轮 user 消息（可选）
+    if (newUserMsg != null && !newUserMsg.isBlank()) {
+        result.add(Message.user(newUserMsg));
+    }
+    
+    return trimToBudget(result);
+}
+```
+
+**trimToBudget() 字符预算裁剪**：
+```java
+private List<Message> trimToBudget(List<Message> messages) {
+    int total = messages.stream().mapToInt(m -> len(m.content())).sum();
+    if (total <= MAX_CONTEXT_CHARS) return messages;  // 24000 字符
+    
+    List<Message> result = new ArrayList<>(messages);
+    int i = 0;
+    while (total > MAX_CONTEXT_CHARS && i < result.size()) {
+        Message m = result.get(i);
+        if (m.isSystem()) { i++; continue; }  // 跳过 system 消息
+        total -= len(m.content());
+        result.remove(i);
+    }
+    return result;
+}
+```
+
+**关键设计点**：
+- **KEEP_RECENT_TURNS = 6**：保留最近 6 轮对话
+- **MAX_CONTEXT_CHARS = 24000**：总字符预算
+- **system 消息不裁剪**：保证系统提示和记忆块始终存在
+- **摘要缓存**：`SummaryUtil.summarize` 内部有 Redis 缓存
+
+### 5.6 SummaryUtil（摘要与记忆抽取）
+
+**职责**：LLM 摘要生成 + 长期记忆抽取 + 脏数据防御。
+
+**summarize() 流程**：
+```java
+public String summarize(List<Message> messages, int maxWordSize) {
+    // 1. 拼接对话文本
+    String raw = messages.stream()
+        .map(m -> m.role() + ": " + m.content())
+        .collect(Collectors.joining("\n"));
+    
+    // 2. 缓存 key（内容 hash）
+    String cacheKey = CACHE_PREFIX + Integer.toHexString(raw.hashCode());
+    
+    // 3. 读缓存
+    try {
+        Object cached = redisUtils.get(cacheKey);
+        if (cached != null) {
+            String cachedStr = String.valueOf(cached);
+            if (!cachedStr.isBlank() && !looksLikeId(cachedStr)) {
+                return cachedStr;
+            }
+            log.warn(">>> 缓存内容可疑，忽略：cacheKey={}, value={}", cacheKey, preview(cachedStr));
+        }
+    } catch (Exception e) {
+        log.warn(">>> 读取 Redis 缓存失败", e);
+    }
+    
+    // 4. 调用 LLM 摘要
+    String prompt = """
+        请把以下对话压缩成简洁摘要，保留：
+        1. 用户的关键诉求和已确认的事实
+        2. 已经执行过的操作及其结果
+        3. 尚未解决的问题
+        忽略寒暄和重复内容。控制在 %d 字以内，直接输出摘要内容。
+        
+        对话：
+        %s
+        """.formatted(maxWordSize, raw);
+    
+    String summary = stripCodeFence(llmClient.chatSimple(prompt));
+    
+    // 5. 防御：空或疑似 ID
+    if (summary == null || summary.isBlank()) return "";
+    if (looksLikeId(summary)) {
+        log.warn(">>> LLM 摘要疑似返回了 ID，放弃：{}", preview(summary));
+        return "";
+    }
+    
+    // 6. 写缓存
+    try {
+        redisUtils.set(cacheKey, summary, Duration.ofHours(1).toSeconds());
+    } catch (Exception e) {
+        log.warn(">>> 保存摘要到 Redis 缓存失败", e);
+    }
+    
+    return summary;
+}
+```
+
+**extractLongTermMemoriesAsList() 流程**：
+```java
+public List<Map<String, Object>> extractLongTermMemoriesAsList(String dialog) {
+    if (dialog == null || dialog.isBlank()) return Collections.emptyList();
+    
+    // 1. 构造 prompt
+    String prompt = """
+        从以下对话中抽取值得长期记住的用户信息。
+        只输出 JSON 数组，不要任何解释。格式：
+        [{"type":"PREFERENCE|FACT|ENTITY","content":"...","importance":0.0~1.0}]
+        没有值得记住的信息则输出 []。
+        
+        判断标准：
+        - PREFERENCE: 用户偏好（语言、风格、习惯）
+        - FACT: 关于用户的稳定事实（部门、职位、常用系统）
+        - ENTITY: 用户关注的具体对象（项目名、系统名）
+        临时性问题不要抽取。
+        
+        对话：
+        %s
+        """.formatted(dialog);
+    
+    // 2. 调用 LLM
+    String raw;
+    try {
+        raw = llmClient.chatSimple(prompt);
+    } catch (Exception e) {
+        log.warn(">>> LLM 抽取记忆调用失败：{}", e.getMessage(), e);
+        return Collections.emptyList();
+    }
+    
+    // 3. 清洗
+    String cleaned = stripCodeFence(raw);
+    if (cleaned == null || cleaned.isBlank()) return Collections.emptyList();
+    if (!cleaned.startsWith("[")) {  // 必须是数组
+        log.warn(">>> 抽取记忆返回非 JSON 数组，丢弃。raw={}", preview(raw));
+        return Collections.emptyList();
+    }
+    
+    // 4. 解析
+    List<Map<String, Object>> items;
+    try {
+        items = objectMapper.readValue(cleaned, new TypeReference<List<Map<String, Object>>>() {});
+    } catch (Exception e) {
+        log.warn(">>> 抽取记忆 JSON 解析失败：{} | raw={}", e.getMessage(), preview(raw));
+        return Collections.emptyList();
+    }
+    
+    // 5. 逐条校验规范化
+    return items.stream()
+        .filter(this::isValidItem)
+        .peek(this::normalizeItem)
+        .collect(Collectors.toList());
+}
+```
+
+**stripCodeFence() 清洗规则**：
+1. 去 ` ```json ... ``` ` 或 ` ``` ... ``` `
+2. 截取第一个 `[` 到最后一个 `]` 之间的内容
+
+**looksLikeId() 脏数据防御**：
+```java
+private boolean looksLikeId(String s) {
+    if (s == null) return false;
+    String t = s.trim();
+    if (t.isEmpty() || t.length() > 64) return false;
+    // 纯 hex（允许连字符），长度 8~36
+    return t.matches("(?i)^[0-9a-f]{8}(-[0-9a-f]{4}){0,4}([0-9a-f]{0,12})?$")
+            && t.replace("-", "").length() >= 8;
+}
+```
+
+**关键设计点**：
+- **缓存防御**：缓存内容疑似 ID 时忽略
+- **LLM 输出防御**：非数组、解析失败、空内容均归零为 `[]`
+- **字段校验**：type 必须在 `PREFERENCE/FACT/ENTITY` 中，content 非空
+- **importance 规范化**：非 Number 或越界时归 0.5 / 0~1
+
+### 5.7 MemoryExtractor（记忆抽取）
+
+**职责**：异步从一轮对话抽取长期记忆。
+
+**extract() 流程**：
+```java
+@Async("memoryExecutor")
+public void extract(String userId, List<Message> turn) {
+    try {
+        if (turn == null || turn.isEmpty()) return;
+        
+        // 1. 拼接对话
+        String dialog = turn.stream()
+            .map(m -> m.role() + ": " + m.content())
+            .collect(Collectors.joining("\n"));
+        
+        // 2. LLM 抽取（带校验）
+        List<Map<String, Object>> items = summaryUtil.extractLongTermMemoriesAsList(dialog);
+        if (items == null || items.isEmpty()) {
+            log.debug("[MemoryExtractor] 未检测到值得记住的信息");
+            return;
+        }
+        
+        // 3. 逐条保存
+        for (Map<String, Object> it : items) {
+            saveOne(userId, it);
+        }
+    } catch (Exception e) {
+        log.warn("长期记忆抽取失败：{}", e.getMessage(), e);
+    }
+}
+```
+
+**saveOne() 流程**：
+```java
+private void saveOne(String userId, Map<String, Object> it) {
+    try {
+        // 1. 字段校验
+        Object typeObj = it.get("type");
+        Object contentObj = it.get("content");
+        if (typeObj == null || contentObj == null) return;
+        String type = String.valueOf(typeObj);
+        String content = String.valueOf(contentObj);
+        if (content.isBlank()) return;
+        
+        // 2. importance 解析
+        double importance = 0.5;
+        Object imp = it.get("importance");
+        if (imp instanceof Number) importance = ((Number) imp).doubleValue();
+        
+        // 3. 去重（相同内容旧记忆失效）
+        List<MemoryItem> existing = memoryStore.findByUserAndContentLike(userId, content);
+        if (existing != null && !existing.isEmpty()) {
+            memoryStore.invalidate(existing.get(0).id());
+        }
+        
+        // 4. 向量化（失败则跳过）
+        List<Double> embedding;
+        try {
+            embedding = embeddingClient.embed(content);
+        } catch (Exception e) {
+            log.warn(">>> 记忆 embedding 失败，跳过保存：content={}, err={}", content, e.toString());
+            return;
+        }
+        if (embedding == null || embedding.isEmpty()) return;
+        
+        // 5. 保存
+        memoryStore.save(MemoryItem.of(userId, type, content, embedding, importance));
+        log.info(">>> 成功保存记忆：type={}, content={}", type, content.substring(0, Math.min(50, content.length())));
+    } catch (Exception e) {
+        log.warn(">>> 保存单条记忆失败：item={}, err={}", it, e.toString());
+    }
+}
+```
+
+**关键设计点**：
+- **异步执行**：`@Async("memoryExecutor")`，不阻塞主流程
+- **单条失败隔离**：`saveOne` 独立 try-catch
+- **embedding 降级**：失败则跳过该条
+- **去重**：相同内容旧记忆失效
+
+### 5.8 RedisMemoryStore（记忆存储）
+
+**职责**：基于 Redis + RediSearch 的向量记忆存储。
+
+**核心方法**：
+
+**save()**：
+```java
+public void save(MemoryItem item) {
+    String key = key(item.userId(), item.id());  // ai:memory:{userId}:{memoryId}
+    byte[] keyBytes = b(key);
+    byte[] embeddingBytes = toFloatBytes(item.embedding());
+    
+    // 1. 主数据：原生 Lettuce 写 Hash
+    try {
+        if (nativeConnection != null) {
+            RedisCommands<byte[], byte[]> cmd = nativeConnection.sync();
+            writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
+            cmd.expire(keyBytes, TTL_SECONDS);  // 90 天
+        } else if (nativeClusterConnection != null) {
+            // 集群模式
+        } else {
+            log.warn(">>> save: 原生连接未初始化");
+            return;
+        }
+    } catch (Exception e) {
+        log.error(">>> 保存记忆主数据失败, key={}", key, e);
+        return;
+    }
+    
+    // 2. 辅助索引：StringRedisTemplate
+    try {
+        String userSetKey = USER_SET_PREFIX + item.userId();  // ai:memory:user:{userId}
+        String reverseKey = REVERSE_PREFIX + item.id();       // ai:memory:reverse:{memoryId}
+        
+        stringRedisTemplate.opsForSet().add(userSetKey, item.id());
+        stringRedisTemplate.expire(userSetKey, TTL_SECONDS, TimeUnit.SECONDS);
+        stringRedisTemplate.opsForValue().set(reverseKey, item.userId(), TTL_SECONDS, TimeUnit.SECONDS);
+    } catch (Exception e) {
+        log.error(">>> 保存记忆辅助索引失败, userId={}, id={}", item.userId(), item.id(), e);
+    }
+}
+```
+
+**searchByUser()**：
+```java
+public List<MemoryItem> searchByUser(String userId, List<Double> queryEmbedding, int topK) {
+    if (queryEmbedding == null || queryEmbedding.isEmpty()) return List.of();
+    if (queryEmbedding.size() != vectorDim) {
+        log.warn(">>> 向量召回跳过：维度不符, 期望={}, 实际={}", vectorDim, queryEmbedding.size());
+        return List.of();
+    }
+    
+    byte[] qBytes = toFloatBytes(queryEmbedding);
+    String query = String.format(
+        "(@userId:{%s} @invalid:{0})=>[KNN %d @embedding $vec AS score]",
+        escapeTag(userId), topK
+    );
+    
+    try {
+        List<byte[]> args = new ArrayList<>();
+        args.add(b("FT.SEARCH"));
+        args.add(b(INDEX_NAME));
+        args.add(b(query));
+        args.add(b("PARAMS"));   args.add(b("2"));
+        args.add(b("vec"));      args.add(qBytes);
+        args.add(b("SORTBY"));   args.add(b("score"));
+        args.add(b("DIALECT"));  args.add(b("2"));
+        args.add(b("LIMIT"));    args.add(b("0")); args.add(b(String.valueOf(topK)));
+        
+        Object raw = dispatch("FT.SEARCH", args, OutputType.NESTED);
+        return parseSearchResult(raw);
+    } catch (Exception e) {
+        log.error(">>> 向量召回失败, userId={}", userId, e);
+        return List.of();
+    }
+}
+```
+
+**getAllActiveUsers()**：
+```java
+public Set<String> getAllActiveUsers() {
+    try {
+        Set<String> activeUsers = new HashSet<>();
+        String pattern = USER_SET_PREFIX + "*";  // ai:memory:user:*
+        
+        ScanOptions scanOptions = ScanOptions.scanOptions()
+            .match(pattern).count(100).build();
+        
+        stringRedisTemplate.execute((RedisCallback<Void>) connection -> {
+            Cursor<byte[]> cursor = connection.keyCommands().scan(scanOptions);
+            try {
+                while (cursor.hasNext()) {
+                    byte[] keyBytes = cursor.next();
+                    if (keyBytes != null) {
+                        String key = new String(keyBytes, StandardCharsets.UTF_8);
+                        if (key.startsWith(USER_SET_PREFIX)) {
+                            String userId = key.substring(USER_SET_PREFIX.length());
+                            if (!userId.isBlank()) activeUsers.add(userId);
+                        }
+                    }
+                }
+            } finally {
+                if (cursor != null) cursor.close();
+            }
+            return null;
         });
-        super.onTimeout(() -> {                                                 // 超时回调
-            closed.set(true);                                                   //    标记关闭
-            Runnable cb = onCloseCallback;                                      //    取回调
-            if (cb != null) {                                                   //    存在
-                try { cb.run(); } catch (Exception ignored) {}                  //    执行（忽略异常）
+        
+        return activeUsers;
+    } catch (Exception e) {
+        log.warn(">>> 获取活跃用户失败", e);
+        throw e;
+    }
+}
+```
+
+**关键设计点**：
+- **双客户端**：主数据用原生 Lettuce（字节读写），辅助索引用 StringRedisTemplate
+- **向量字节序**：`ByteOrder.LITTLE_ENDIAN`
+- **TAG 转义**：`escapeTag` 处理特殊字符
+- **SCAN 遍历**：避免 `KEYS` 阻塞
+
+### 5.9 KnowledgeRouter（知识库路由）
+
+**职责**：基于向量相似度自动选择最相关知识库。
+
+**refresh() 流程**：
+```java
+private boolean refresh() {
+    if (!refreshing.compareAndSet(false, true)) return false;  // CAS 互斥
+    lastAttemptAt = System.currentTimeMillis();
+    try {
+        List<Long> kbIds = getAllKnowledgeBaseIds();
+        int success = 0;
+        for (Long kbId : kbIds) {
+            try {
+                String desc = buildDescription(kbId);
+                if (desc == null || desc.isBlank()) continue;
+                if (desc.length() > MAX_DESC_LENGTH) desc = desc.substring(0, MAX_DESC_LENGTH);
+                float[] vec = embeddingModel.embed(desc).content().vector();
+                kbVectors.put(kbId, vec);
+                kbDescriptions.put(kbId, desc);
+                success++;
+            } catch (Exception e) {
+                log.warn(">>> 知识库 {} 描述向量生成失败，将在下次刷新时重试", kbId, e);
             }
+        }
+        return true;
+    } finally {
+        refreshing.set(false);
+    }
+}
+```
+
+**ensureReady() 兜底重建**：
+```java
+private void ensureReady() {
+    if (!kbVectors.isEmpty()) return;
+    if (System.currentTimeMillis() - lastAttemptAt < retryBackoffMillis) return;  // 节流
+    try {
+        refresh();
+    } catch (Exception e) {
+        log.warn(">>> KnowledgeRouter 兜底重建向量失败", e);
+    }
+}
+```
+
+**route() 路由**：
+```java
+public Long route(String question) {
+    if (question == null || question.isBlank()) return null;
+    ensureReady();
+    if (kbVectors.isEmpty()) return null;
+    
+    float[] questionVec = embeddingModel.embed(question).content().vector();
+    
+    Long bestKbId = null;
+    double bestScore = -1;
+    for (Map.Entry<Long, float[]> entry : kbVectors.entrySet()) {
+        double score = cosine(questionVec, entry.getValue());
+        if (score > bestScore) {
+            bestScore = score;
+            bestKbId = entry.getKey();
+        }
+    }
+    
+    if (bestScore < MIN_SCORE) return null;  // 0.5
+    return bestKbId;
+}
+```
+
+**buildDescription() 描述构建**：
+```java
+private String buildDescription(Long kbId) {
+    StringBuilder sb = new StringBuilder();
+    try {
+        JSONObject docResp = knowledgeService.getDocuments(String.valueOf(kbId));
+        JSONArray docs = docResp.getJSONArray("result");
+        if (docs == null) docs = docResp.getJSONArray("data");
+        if (docs != null && !docs.isEmpty()) {
+            sb.append("知识库 ").append(kbId).append(" 包含文档：");
+            int count = 0;
+            for (int i = 0; i < docs.size() && count < 10; i++) {
+                JSONObject o = docs.getJSONObject(i);
+                JSONArray rows = o.getJSONArray("rows");
+                if (rows == null) continue;
+                for (int j = 0; j < rows.size() && count < 10; j++) {
+                    String title = rows.getJSONObject(j).getString("originName");
+                    if (title != null && !title.isBlank()) {
+                        sb.append(title).append("；");
+                        count++;
+                    }
+                }
+            }
+            sb.append("\n");
+        }
+    } catch (Exception e) {
+        log.warn("获取知识库 {} 文档失败", kbId, e);
+    }
+    return sb.toString();
+}
+```
+
+**关键设计点**：
+- **后台预热**：`@PostConstruct` 启动定时任务，首次延迟 0
+- **失败自愈**：请求链路兜底重建（带节流 + 互斥）
+- **MIN_SCORE = 0.5**：低于阈值不选知识库
+- **描述构建**：文档标题拼接，最多 10 个，截断 500 字
+
+### 5.10 ToolRegistry（工具注册表）
+
+**职责**：注册所有 `AiTool` Bean，提供按角色过滤的可用工具列表。
+
+```java
+@Component
+public class ToolRegistry {
+    private final Map<String, AiTool> tools = new ConcurrentHashMap<>();
+    
+    public ToolRegistry(List<AiTool> allTools) {
+        for (AiTool t : allTools) {
+            AiTool prev = tools.put(t.name(), t);
+            if (prev != null) log.warn("工具名冲突: {}", t.name());
+        }
+        log.info(">>> 工具注册完成，共 {} 个: {}", tools.size(), tools.keySet());
+    }
+    
+    public AiTool get(String name) { return tools.get(name); }
+    
+    /** 给 LLM 看的工具描述列表（已按角色过滤） */
+    public List<ToolSpec> availableTools(AiToolContext ctx) {
+        return tools.values().stream()
+            .filter(t -> isAllowed(t, ctx))
+            .map(t -> new ToolSpec(t.name(), t.description(), t.parameterSchema()))
+            .toList();
+    }
+    
+    /** 执行前二次校验 */
+    public boolean isAllowed(String name, AiToolContext ctx) {
+        AiTool t = tools.get(name);
+        return t != null && isAllowed(t, ctx);
+    }
+    
+    private boolean isAllowed(AiTool tool, AiToolContext ctx) {
+        if (tool.allowedRoles().contains("*")) return true;
+        if (ctx == null) return false;
+        return tool.allowedRoles().stream().anyMatch(ctx::hasRole);
+    }
+}
+```
+
+**关键设计点**：
+- **构造注入**：Spring 自动注入所有 `AiTool` Bean
+- **冲突检测**：同名工具记录警告
+- **二次校验**：`isAllowed` 在 AgentLoop 中调用，防止 LLM 幻觉
+
+### 5.11 AiToolContext（工具上下文）
+
+**职责**：ThreadLocal 保存当前用户 ID 和角色集合。
+
+```java
+public class AiToolContext {
+    private static final ThreadLocal<AiToolContext> HOLDER = new ThreadLocal<>();
+    
+    private final String userId;
+    private final RedisUtils redisUtils;
+    private final Set<String> roleSet;
+    
+    /** 从 Redis 读取真实角色 */
+    public static AiToolContext capture(String userId, RedisUtils redisUtils) {
+        Set<String> roles = loadRolesFromRedis(userId, redisUtils);
+        return new AiToolContext(userId, redisUtils, roles);
+    }
+    
+    private static Set<String> loadRolesFromRedis(String userId, RedisUtils redisUtils) {
+        if (userId == null || redisUtils == null) return new HashSet<>();
+        try {
+            String redisKey = userId + GlobalBusinessStatusEnum.REDIS_KEY_USER_ROLE.desc;
+            Object raw = redisUtils.hget(redisKey, userId);
+            if (raw instanceof Role roleContainer) {
+                List<Role> roleList = roleContainer.getRoleList();
+                if (roleList != null && !roleList.isEmpty()) {
+                    return roleList.stream()
+                        .map(Role::getName)
+                        .filter(name -> name != null && !name.isBlank())
+                        .collect(Collectors.toSet());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("从 Redis 读取用户角色失败: userId={}", userId, e);
+        }
+        return new HashSet<>();
+    }
+    
+    public static void set(AiToolContext context) { HOLDER.set(context); }
+    public static AiToolContext get() { return HOLDER.get(); }
+    public static void clear() { HOLDER.remove(); }
+    
+    public boolean hasRole(String role) {
+        if (role == null) return false;
+        if ("*".equals(role)) return true;
+        return roleSet.contains(role);
+    }
+}
+```
+
+**关键设计点**：
+- **ThreadLocal**：每个线程独立上下文
+- **Redis 读取角色**：与 PermissionAspect / RoleUtils 同一来源
+- **必须清理**：`AgentLoop.executeWithGuard` 的 `finally` 中调用 `clear()`
+
+### 5.12 QueryKnowledgeTool（知识库问答工具）
+
+**职责**：基于知识库的精准问答，支持自动路由。
+
+**execute() 流程**：
+```java
+public ToolResult execute(Map<String, Object> args, AiToolContext ctx) {
+    String question = String.valueOf(args.get("question"));
+    if (question == null || question.isBlank() || "null".equals(question)) {
+        return ToolResult.fail("问题不能为空");
+    }
+    
+    // 1. 解析 knowledgeBaseId
+    Long kbId = parseKbId(args.get("knowledgeBaseId"));
+    if (kbId != null && !isValidKnowledgeId(kbId)) {
+        log.warn("[query_knowledge] 无效 knowledgeBaseId={}，回落自动路由", kbId);
+        kbId = null;
+    }
+    
+    // 2. 自动路由
+    if (kbId == null) {
+        kbId = knowledgeRouter.route(question);
+        if (kbId == null) {
+            return ToolResult.ok("无法判断该问题属于哪个知识库，请明确指定知识库 ID。");
+        }
+        log.info("[query_knowledge] 自动路由到知识库 {}", kbId);
+    }
+    
+    // 3. 查询
+    String content = queryOne(kbId, question);
+    return ToolResult.ok(content, Map.of("knowledgeBaseId", kbId));
+}
+```
+
+**isValidKnowledgeId() 校验**：
+```java
+private boolean isValidKnowledgeId(Long id) {
+    if (id == null) return false;
+    String s = String.valueOf(id);
+    if (s.length() < MIN_KB_ID_LENGTH || !s.matches("\\d+")) return false;  // 13 位纯数字
+    return templateRegistry.get(s) != null;  // 已注册
+}
+```
+
+**queryOne() 查询**：
+```java
+private String queryOne(Long knowledgeBaseId, String question) {
+    String knowledgeId = String.valueOf(knowledgeBaseId);
+    if (knowledgeId.length() < MIN_KB_ID_LENGTH || !knowledgeId.matches("\\d+")) {
+        return "无法定位知识库，请稍后再试。";
+    }
+    
+    // 1. 获取模板
+    KnowledgeBase template = templateRegistry.get(knowledgeId);
+    if (template == null) {
+        try {
+            knowledgeRegistrar.register(knowledgeId);
+            template = templateRegistry.get(knowledgeId);
+        } catch (Exception e) {
+            return "无法加载该知识库，请稍后再试。";
+        }
+    }
+    if (template == null) return "未找到相关知识库。";
+    
+    // 2. 拷贝 + 设置查询
+    KnowledgeBase kb = copyTemplate(template);
+    kb.setQuery(question);
+    
+    // 3. 校验配置
+    if (kb.getProjectId() == null || kb.getRelation() == null || kb.getRelation().isEmpty()
+            || kb.getRelation().get(0).getEmbedding() == null) {
+        return "该知识库配置不完整，暂时无法检索。";
+    }
+    if (kb.getIndexMode() == null) kb.setIndexMode("vector");
+    if (kb.getSimilarityTopK() == null) kb.setSimilarityTopK(10);
+    
+    // 4. 查询下游
+    JSONArray arr = knowledgeService.queryAnswer(kb);
+    if (arr == null || arr.isEmpty()) return "知识库中未找到相关答案。";
+    
+    // 5. 拼接结果（最多 5 条，每条 800 字）
+    StringBuilder sb = new StringBuilder();
+    int n = Math.min(arr.size(), MAX_RESULT_ITEMS);
+    for (int i = 0; i < n; i++) {
+        JSONObject o = arr.getJSONObject(i);
+        String text = o.getString("text");
+        if (text == null || text.isBlank()) continue;
+        text = text.replaceAll("<!--.*?-->", "").trim();  // 去注释
+        if (text.length() > MAX_TEXT_LEN) text = text.substring(0, MAX_TEXT_LEN) + "...";
+        sb.append("- ").append(text).append("\n");
+    }
+    if (sb.length() == 0) return "知识库中未找到相关答案。";
+    return "以下是与问题相关的内容：\n" + sb;
+}
+```
+
+**关键设计点**：
+- **knowledgeBaseId 可选**：未传或无效则自动路由
+- **13 位纯数字**：`MIN_KB_ID_LENGTH = 13`
+- **模板拷贝**：避免污染 `templateRegistry`
+- **结果裁剪**：最多 5 条，每条 800 字
+
+### 5.13 AiChatExecutor（AI 线程池）
+
+**职责**：AI 对话专用线程池，限流 + 拒绝策略。
+
+```java
+@Component
+@ConditionalOnProperty(prefix = "ai.chat", name = "enabled", havingValue = "true", matchIfMissing = true)
+public final class AiChatExecutor {
+    private final ThreadPoolExecutor executor;
+    
+    public AiChatExecutor(
+            @Value("${ai.chat.max-concurrent:16}") int maxConcurrent,
+            @Value("${ai.chat.queue-capacity:100}") int queueCapacity,
+            @Value("${ai.chat.keep-alive-seconds:60}") long keepAliveSeconds) {
+        // 参数校验
+        if (maxConcurrent < 1) throw new IllegalArgumentException("AI 聊天最大并发数必须大于 0");
+        if (queueCapacity < 1) throw new IllegalArgumentException("AI 聊天队列容量必须大于 0");
+        
+        // 命名线程工厂
+        AtomicInteger sequence = new AtomicInteger();
+        ThreadFactory defaultFactory = Executors.defaultThreadFactory();
+        ThreadFactory namedFactory = task -> {
+            Thread thread = defaultFactory.newThread(task);
+            thread.setName("ai-chat-" + sequence.incrementAndGet());
+            thread.setDaemon(false);
+            return thread;
+        };
+        
+        // 线程池
+        this.executor = new ThreadPoolExecutor(
+            0,                          // 核心线程 0
+            maxConcurrent,              // 最大并发
+            keepAliveSeconds,           // 空闲回收
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(queueCapacity),  // 有界队列
+            namedFactory,
+            new ThreadPoolExecutor.AbortPolicy()       // 拒绝抛异常
+        );
+        this.executor.allowCoreThreadTimeOut(true);     // 核心线程也回收
+    }
+    
+    /** 提交任务。被拒绝时返回 false，不抛异常。 */
+    public boolean submit(Runnable task) {
+        if (task == null) return false;
+        try {
+            executor.execute(task);
+            return true;
+        } catch (RejectedExecutionException e) {
+            log.warn("AiChatExecutor 已满，任务被拒绝。activeCount={}, queueSize={}",
+                    executor.getActiveCount(), executor.getQueue().size());
+            return false;
+        }
+    }
+    
+    @PreDestroy
+    public void shutdown() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("AiChatExecutor 30s 内未关闭，强制中断");
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            executor.shutdownNow();
+        }
+    }
+}
+```
+
+**关键设计点**：
+- **核心线程 0**：完全按需创建，空闲回收
+- **有界队列**：防止无界堆积
+- **AbortPolicy**：拒绝抛异常，`submit` 捕获返回 false
+- **优雅关闭**：等待 30s 后强制中断
+- **命名线程**：`ai-chat-{n}` 便于排查
+
+### 5.14 RedisLockHelper（分布式锁）
+
+```java
+@Component
+@RequiredArgsConstructor
+public class RedisLockHelper {
+    private static final String UNLOCK_LUA =
+        "if redis.call('get', KEYS[1]) == ARGV[1] then " +
+        "return redis.call('del', KEYS[1]) else return 0 end";
+    
+    private final StringRedisTemplate redis;
+    
+    /** 尝试加锁 */
+    public boolean tryLock(String key, String token, long ttlMillis) {
+        Boolean ok = redis.opsForValue().setIfAbsent(key, token, Duration.ofMillis(ttlMillis));
+        return Boolean.TRUE.equals(ok);
+    }
+    
+    /** 解锁（Lua 比对 token） */
+    public void unlock(String key, String token) {
+        redis.execute(new DefaultRedisScript<>(UNLOCK_LUA, Long.class),
+                Collections.singletonList(key), token);
+    }
+    
+    /** 强制解锁 */
+    public void forceUnlock(String key) {
+        redis.delete(key);
+    }
+}
+```
+
+**关键设计点**：
+- **原子加锁**：`setIfAbsent` + TTL
+- **Lua 解锁**：比对 token 后删除，避免误删他人锁
+- **强制解锁**：新请求替换旧请求时使用
+
+### 5.15 AiChatSseEmitter（SSE 封装）
+
+```java
+public class AiChatSseEmitter extends SseEmitter {
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private volatile Runnable onCloseCallback;
+    
+    public AiChatSseEmitter() {
+        super(300_000L);  // 5 分钟超时
+        
+        super.onCompletion(() -> {
+            closed.set(true);
+            Runnable cb = onCloseCallback;
+            if (cb != null) { try { cb.run(); } catch (Exception ignored) {} }
+        });
+        super.onTimeout(() -> {
+            closed.set(true);
+            Runnable cb = onCloseCallback;
+            if (cb != null) { try { cb.run(); } catch (Exception ignored) {} }
         });
     }
-
-    /**                                                                         // Javadoc
-     * 是否已关闭。                                                               // 说明
-     */                                                                         // 结束
-    public boolean isClosed() {                                                 // 方法
-        return closed.get();                                                    // 返回标志
-    }
-
-    /**                                                                         // Javadoc
-     * 注册关闭回调。若注册时已关闭，立即执行。                                     // 说明
-     */                                                                         // 结束
-    public void setOnCloseCallback(Runnable callback) {                         // 方法
-        this.onCloseCallback = callback;                                        // 赋值
-        // 如果注册之前就已经关闭了，立即回调                                       // 注释
-        if (closed.get() && callback != null) {                                 //    已关闭且回调非空
-            try { callback.run(); } catch (Exception ignored) {}                //    立即执行
+    
+    public boolean isClosed() { return closed.get(); }
+    
+    public void setOnCloseCallback(Runnable callback) {
+        this.onCloseCallback = callback;
+        if (closed.get() && callback != null) {  // 注册前已关闭，立即回调
+            try { callback.run(); } catch (Exception ignored) {}
         }
     }
-
-    /** 发送纯文本 delta（事件名为前端约定的 delta） */                              // 注释
-    public void send(String chunk) {                                            // 发送文本
-        if (chunk == null || chunk.isEmpty()) return;                           // 1. 空返回
-        if (closed.get()) return;                                               // 2. 已关闭返回
-        try {                                                                   // 3. try
-            super.send(SseEmitter.event()                                       //    发送
-                    .name("delta")                                              //    事件名 delta
-                    .data(chunk, MediaType.TEXT_PLAIN));                        //    文本类型
-        } catch (IOException e) {                                               // 4. IO 异常
-            log.warn("SSE send failed (IOException): {}", e.getMessage());      //    日志
-            closed.set(true);                                                   //    标记关闭
-        } catch (IllegalStateException e) {                                     // 5. 状态异常
-            log.warn("SSE already closed, ignore send.");                       //    日志
-            closed.set(true);                                                   //    标记关闭
-        }
-    }
-
-    /** 发送带事件名的结构化事件（payload 由 Spring 序列化为 JSON） */                // 注释
-    public void send(String eventName, Object data) {                           // 发送事件
-        if (closed.get()) return;                                               // 1. 已关闭返回
-        try {                                                                   // 2. try
-            super.send(SseEmitter.event()                                       //    发送
-                    .name(eventName == null || eventName.isEmpty() ? "message" : eventName) // 事件名
-                    .data(data, MediaType.APPLICATION_JSON));                   //    JSON 类型
-        } catch (IOException e) {                                               // 3. IO 异常
-            log.warn("SSE send failed (IOException): {}", e.getMessage());      //    日志
-            closed.set(true);                                                   //    标记关闭
-        } catch (IllegalStateException e) {                                     // 4. 状态异常
-            log.warn("SSE already closed, ignore send.");                       //    日志
-            closed.set(true);                                                   //    标记关闭
-        }
-    }
-
-    /**                                                                         // Javadoc
-     * 发送原始 SseEventBuilder。                                                 // 说明
-     */                                                                         // 结束
-    public void send(SseEmitter.SseEventBuilder event) {                        // 发送
-        if (closed.get()) return;                                               // 已关闭返回
-        try {                                                                   // try
-            super.send(event);                                                  //    发送
-        } catch (IOException e) {                                               // IO 异常
-            log.warn("SSE send failed (IOException): {}", e.getMessage());      //    日志
-            closed.set(true);                                                   //    标记关闭
-        } catch (IllegalStateException e) {                                     // 状态异常
-            log.warn("SSE already closed, ignore send.");                       //    日志
-            closed.set(true);                                                   //    标记关闭
-        }
-    }
-
-    @Override                                                                   // 重写
-    public void complete() {                                                    // 关闭
-        if (!closed.compareAndSet(false, true)) return;                         // 1. CAS 保证幂等
-        try {                                                                   // 2. try
-            super.complete();                                                   //    调用父类关闭
-        } finally {                                                             // 3. finally
-            if (onCloseCallback != null) {                                      //    有回调
-                try { onCloseCallback.run(); } catch (Exception ignored) {}     //    执行
-                onCloseCallback = null;                                         //    置空（避免重复执行）
+    
+    public void send(String chunk) { /* delta 事件 */ }
+    public void send(String eventName, Object data) { /* 结构化事件 */ }
+    public void send(SseEmitter.SseEventBuilder event) { /* 原始事件 */ }
+    
+    @Override
+    public void complete() {
+        if (!closed.compareAndSet(false, true)) return;  // CAS 幂等
+        try {
+            super.complete();
+        } finally {
+            if (onCloseCallback != null) {
+                try { onCloseCallback.run(); } catch (Exception ignored) {}
+                onCloseCallback = null;
             }
         }
     }
 }
 ```
 
----
-
-## 四、关键设计要点总结
-
-| 设计点                | 实现方式                                     | 目的                                     |
-| ------------------ | ---------------------------------------- | -------------------------------------- |
-| **会话串行**           | Redis 分布式锁 + 内存状态清理                      | 同一会话同时只有一个请求在跑                         |
-| **锁安全释放**          | Lua 脚本比对 token                           | 避免误删他人锁                                |
-| **SSE 幂等关闭**       | `AtomicBoolean closed` CAS               | 防止重复 complete 异常                       |
-| **工具超时**           | `CompletableFuture.orTimeout(30s)`       | 防止工具阻塞整个 Loop                          |
-| **ThreadLocal 清理** | `finally { AiToolContext.clear(); }`     | 防止线程池污染                                |
-| **记忆召回降级**         | embedding 失败 → 跳过保存                      | 单条失败不影响整批                              |
-| **知识库路由自愈**        | 后台定时 + 请求链路兜底                            | 启动失败后能自动恢复 |
-| **LLM 脏数据防御**      | `looksLikeId` 检测 requestId               | 防止网关错误污染缓存/记忆                          |
-| **上下文预算**          | 超 6 轮做摘要 + 24000 字符裁剪                    | 控制 token 成本                            |
-| **系统提示注入**         | `messages.add(0, system(...))`           | 强制 LLM 优先调用知识库工具                       |
-| **挂起/确认**          | Redis 存 PendingState + `tool_confirm` 事件 | 敏感操作等用户确认                              |
+**关键设计点**：
+- **CAS 幂等**：`complete()` 只执行一次
+- **回调注册前已关闭**：立即执行
+- **IOException 自动标记关闭**：防止继续发送
+- **5 分钟超时**：防止连接泄漏
 
 ---
 
-## 五、待办与已知问题
+## 6. 关键机制深度剖析
 
-| 项                                         | 位置                                      | 说明                           |
-| ----------------------------------------- | --------------------------------------- | ---------------------------- |
-| PG 持久化                                    | `InMemoryChatHistoryStore`              | TODO 待 PG 表就绪后替换             |
-| 政策状态                                      | `InMemoryChatHistoryStore.policyStatus` | 固定返回 first=true, over30=true |
-| 批量活跃用户                                    | `MemoryStore.getAllActiveUsers`         | Redis 实现已提供，接口 default 抛异常   |
-| `AgentLoop.memoryStore`                   | 字段未使用                                   | 可移除或预留                       |
-| `AiAgentService.stop` 回调                  | 与 `onCompletion` 可能重复清理                 | 需确认幂等性                       |
-| `LangChain4jLlmClient.onCompleteResponse` | `fullContent` 被覆盖                       | 流式增量与完整内容可能不一致，需确认           |
+### 6.1 并发控制机制
+
+#### 6.1.1 三层并发控制
+
+| 层次 | 机制 | 目的 |
+|------|------|------|
+| **会话级** | Redis 分布式锁 | 同一会话串行 |
+| **全局级** | AiChatExecutor 线程池 | 全局并发限流 |
+| **请求级** | SSE closed 标志 + requestId | 单请求可中断 |
+
+#### 6.1.2 会话替换流程
+
+```
+新请求到达（同一 memoryId）
+   │
+   ├─ 1. oldToken = runningTokens.remove(memoryId)
+   ├─ 2. if (oldToken != null) forceUnlock(lockKey)
+   ├─ 3. oldEmitter = runningEmitters.remove(memoryId)
+   ├─ 4. if (oldEmitter != null) oldEmitter.send("error", "会话已被新请求替换")
+   ├─ 5. oldEmitter.complete()
+   │       └─ onCompletion 回调触发
+   │           └─ runningEmitters.remove(memoryId, oldEmitter)  // 已被移除，无效
+   │
+   ├─ 6. runningEmitters.put(memoryId, newEmitter)
+   ├─ 7. runningTokens.put(memoryId, newToken)
+   ├─ 8. tryLock(lockKey, newToken, 5000L)
+   └─ 9. chatExecutor.execute(...)
+```
+
+**关键顺序**：`forceUnlock` 必须在 `oldEmitter.complete()` 之前，否则 `onCompletion` 回调会提前清理 `runningTokens`，导致 `oldToken` 为 null。
+
+### 6.2 锁安全机制
+
+#### 6.2.1 误删他人锁问题
+
+**问题场景**：
+```
+T1: 请求 A 加锁，TTL 5s
+T2: 请求 A 执行超过 5s（LLM 慢）
+T3: 锁自动过期，请求 B 加锁成功
+T4: 请求 A 执行完毕，调用 unlock
+T5: 请求 A 误删请求 B 的锁 ← BUG
+```
+
+**解决方案**：Lua 脚本比对 token
+```lua
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+```
+
+只有 token 匹配才删除，保证只删自己的锁。
+
+### 6.3 SSE 生命周期
+
+#### 6.3.1 状态转换
+
+```
+[创建] → [发送中] → [完成/超时/客户端断开] → [已关闭]
+   │         │              │
+   │         │              └─ onCompletion/onTimeout 回调
+   │         │
+   │         └─ send() 时 IOException / IllegalStateException → closed.set(true)
+   │
+   └─ complete() CAS 幂等
+```
+
+#### 6.3.2 事件协议
+
+| 事件名 | 触发时机 | payload |
+|--------|----------|---------|
+| `delta` | LLM 流式输出 | `{text: "片段"}` |
+| `tool` | 工具执行 | `{name, args, status, result?}` |
+| `tool_confirm` | 需确认工具 | `{callId, tool, args}` |
+| `done` | 完成 | `{messageId}` 或 `{answer}` |
+| `error` | 异常 | `{code?, message}` |
+
+### 6.4 长期记忆机制
+
+#### 6.4.1 记忆生命周期
+
+```
+对话完成
+   │
+   ▼
+MemoryExtractor.extract()（异步）
+   │
+   ├─ LLM 抽取 → List<Map>
+   ├─ 逐条校验（type/content）
+   ├─ 去重（相同内容旧记忆失效）
+   ├─ 向量化（失败跳过）
+   └─ MemoryStore.save()
+        │
+        ▼
+   Redis Hash（主数据）+ Set（用户索引）+ 反向索引
+        │
+        ▼
+   90 天后自动过期
+        │
+        ▼
+   MemoryDecayJob（每日 3 点）
+        ├─ decayAll(userId, 0.95)  // 重要性 × 0.95
+        └─ deleteBelow(userId, 0.1)  // 删除重要性 < 0.1
+```
+
+#### 6.4.2 记忆召回
+
+```
+新对话开始
+   │
+   ▼
+AiAgentRunner.run()
+   │
+   ├─ embeddingClient.embed(request.message())
+   ├─ memoryStore.searchByUser(userId, qVec, 5)
+   │     └─ RediSearch KNN 查询
+   └─ 拼成 memoryBlock → 注入 ContextBuilder
+```
+
+### 6.5 知识库路由机制
+
+#### 6.5.1 预热与自愈
+
+```
+应用启动
+   │
+   ▼
+@PostConstruct init()
+   │
+   └─ scheduleWithFixedDelay(refreshQuietly, 0, 10min)
+        │
+        ▼
+   refresh()
+        ├─ getAllKnowledgeBaseIds()
+        ├─ for each kbId:
+        │     ├─ buildDescription(kbId)  // 文档标题拼接
+        │     ├─ embeddingModel.embed(desc)
+        │     └─ kbVectors.put(kbId, vec)
+        └─ 失败：保留旧缓存，下次重试
+
+请求链路
+   │
+   ▼
+route(question)
+   │
+   ├─ ensureReady()  // 缓存空则兜底重建（节流 + 互斥）
+   ├─ embed(question)
+   └─ 遍历计算余弦相似度
+```
+
+#### 6.5.2 路由决策
+
+```
+bestScore >= 0.5 → 返回 bestKbId
+bestScore <  0.5 → 返回 null（由调用方走默认知识库）
+```
 
 ---
 
-**文档版本**：1.0  
-**最后更新**：2026-10-10  
-**适用代码范围**：`com.lenovo.ai.*` 全部模块
+## 7. 配置项说明
+
+### 7.1 LangChain4j 配置
+
+```yaml
+langchain4j:
+  open-ai:
+    base-url: https://api.example.com/v1
+    api-key: sk-xxx
+    chat-model:
+      model-name: qwen3-max
+    streaming-chat-model:
+      model-name: qwen3-max
+      temperature: 0.7
+    embedding-model:
+      model-name: text-embedding-v3
+  http:
+    timeout-seconds: 60
+    max-retries: 3
+    log-requests: false
+    log-responses: false
+```
+
+### 7.2 AI 对话配置
+
+```yaml
+ai:
+  chat:
+    enabled: true              # 是否启用
+    max-concurrent: 16         # 最大并发
+    queue-capacity: 100        # 队列容量
+    keep-alive-seconds: 60     # 空闲回收
+  embedding:
+    dimension: 1536            # 向量维度（需与 embedding 模型一致）
+  knowledge-router:
+    refresh-minutes: 10        # 刷新间隔
+    retry-backoff-millis: 60000 # 兜底重建节流
+```
+
+### 7.3 配置项详解
+
+| 配置项 | 默认值 | 说明 | 调优建议 |
+|--------|--------|------|----------|
+| `ai.chat.max-concurrent` | 16 | 最大并发对话数 | 根据 LLM 网关 QPS 调整 |
+| `ai.chat.queue-capacity` | 100 | 排队队列 | 过大导致延迟高，过小拒绝多 |
+| `ai.chat.keep-alive-seconds` | 60 | 线程空闲回收 | 高并发场景可减小 |
+| `ai.embedding.dimension` | 1536 | 向量维度 | **必须与模型一致**，否则 KNN 失败 |
+| `ai.knowledge-router.refresh-minutes` | 10 | 刷新间隔 | 知识库变更频繁时减小 |
+| `ai.knowledge-router.retry-backoff-millis` | 60000 | 兜底节流 | 防止打爆下游 |
+| `langchain4j.http.timeout-seconds` | 60 | HTTP 超时 | 流式场景建议 ≥ 120 |
+| `langchain4j.http.max-retries` | 3 | 重试次数 | 流式模型不支持 |
+
+---
+
+## 8. SSE 事件协议
+
+### 8.1 事件总览
+
+```
+event: delta
+data: {"text":"你好"}
+
+event: delta
+data: {"text":"，我是"}
+
+event: tool
+data: {"name":"query_knowledge","args":{"question":"..."},"status":"executing"}
+
+event: tool
+data: {"name":"query_knowledge","args":{"question":"..."},"status":"completed","result":"..."}
+
+event: done
+data: {"messageId":12345}
+```
+
+### 8.2 事件类型详解
+
+| 事件 | 频率 | payload 字段 | 前端处理 |
+|------|------|--------------|----------|
+| `delta` | 高 | `text` | 追加到当前消息 |
+| `tool` | 中 | `name`, `args`, `status`, `result?` | 显示工具执行状态 |
+| `tool_confirm` | 低 | `callId`, `tool`, `args` | 弹出确认框 |
+| `done` | 一次 | `messageId` 或 `answer` | 结束当前消息 |
+| `error` | 低 | `code?`, `message` | 显示错误 |
+
+### 8.3 事件顺序保证
+
+```
+正常流程：
+  delta* → tool(executing) → tool(completed) → delta* → done
+
+需确认流程：
+  delta* → tool_confirm → [SSE 关闭]
+
+错误流程：
+  delta* → error → [SSE 关闭]
+```
+
+---
+
+## 9. 异常处理与降级策略
+
+### 9.1 异常分层
+
+| 层次 | 异常类型 | 处理策略 |
+|------|----------|----------|
+| **Controller** | 参数校验 | 返回 400 |
+| **Service** | 加锁失败 | 返回错误 SSE |
+| **Runner** | 落库/召回失败 | 日志 + 继续（记忆召回降级） |
+| **AgentLoop** | LLM/工具异常 | 发 error 事件 + 关闭 SSE |
+| **LLM** | 流式超时 | 返回空响应 |
+| **MemoryStore** | embedding 失败 | 跳过该条记忆 |
+| **KnowledgeRouter** | 刷新失败 | 保留旧缓存 |
+
+### 9.2 降级矩阵
+
+| 组件 | 故障 | 降级行为 | 影响 |
+|------|------|----------|------|
+| **Embedding** | 不可用 | 跳过记忆召回 | 无长期记忆，但对话正常 |
+| **MemoryStore** | 不可用 | 返回空列表 | 无长期记忆 |
+| **KnowledgeRouter** | 缓存空 | 返回 null | 由调用方走默认知识库 |
+| **LLM** | 超时 | 返回空响应 | 对话失败 |
+| **工具** | 超时/异常 | `ToolResult.fail` | LLM 收到失败结果，可重新决策 |
+| **Redis** | 不可用 | 加锁失败 | 返回错误 SSE |
+| **SSE** | 关闭 | 检测退出 | 提前结束 |
+
+### 9.3 兜底策略
+
+```java
+// 1. 记忆召回降级
+List<Double> qVec = embeddingClient.embed(request.message());  // 抛异常 → catch 捕获
+
+// 2. 工具超时
+CompletableFuture.supplyAsync(...).orTimeout(30, SECONDS)
+
+// 3. LLM 超时
+future.get(120, TimeUnit.SECONDS);
+
+// 4. ThreadLocal 清理
+try { ... } finally { AiToolContext.clear(); }
+
+// 5. 锁释放
+finally { redisLockHelper.unlock(lockKey, token); }
+
+// 6. SSE 关闭
+try { emitter.send(...) } catch (IOException e) { closed.set(true); }
+
+// 7. 记忆抽取单条隔离
+for (Map<String, Object> it : items) {
+    try { saveOne(userId, it); } catch (Exception e) { log.warn(...); }
+}
+```
+
+---
+
+## 10. 性能与并发设计
+
+### 10.1 性能指标
+
+| 指标 | 目标 | 说明 |
+|------|------|------|
+| 首字延迟 | < 2s | LLM 流式输出 |
+| 工具执行 | < 30s | 超时保护 |
+| 上下文构建 | < 100ms | 含摘要缓存 |
+| 记忆召回 | < 200ms | KNN 查询 |
+| 知识库路由 | < 100ms | 余弦相似度 |
+
+### 10.2 并发设计
+
+| 层面 | 机制 | 参数 |
+|------|------|------|
+| **会话级** | Redis 锁 | TTL 5s |
+| **全局级** | 线程池 | 16 并发 + 100 队列 |
+| **异步记忆** | memoryExecutor | 2-4 线程 + 200 队列 |
+| **向量刷新** | 单线程定时 | 10 分钟间隔 |
+
+### 10.3 资源消耗
+
+| 资源 | 消耗 | 说明 |
+|------|------|------|
+| **Redis 连接** | 2 个（String + Native） | 主数据 + 辅助索引 |
+| **线程** | 16（对话）+ 4（记忆） | 可配 |
+| **内存** | 上下文 24000 字符/会话 | 约 50KB |
+| **Redis 存储** | 记忆 ~1KB/条 | 90 天 TTL |
+
+### 10.4 优化建议
+
+1. **LLM 缓存**：相同问题可缓存响应
+2. **工具并发**：多个工具可并行执行（需确认无依赖）
+3. **记忆预加载**：会话开始时批量召回
+4. **上下文压缩**：更激进的摘要策略
+5. **向量索引优化**：调整 HNSW 参数
+
+---
+
+## 11. 安全与权限
+
+### 11.1 权限模型
+
+```
+用户 → 角色（Redis）→ AiToolContext.roleSet
+   │
+   ▼
+ToolRegistry.availableTools(ctx)
+   └─ 过滤 allowedRoles 不匹配的工具
+   │
+   ▼
+AgentLoop 执行前二次校验
+   └─ toolRegistry.isAllowed(name, ctx)
+```
+
+### 11.2 权限校验点
+
+| 校验点 | 位置 | 目的 |
+|--------|------|------|
+| **工具列表过滤** | `availableTools` | 不给 LLM 未授权工具 |
+| **执行前校验** | `AgentLoop` | 防止 LLM 幻觉调用 |
+| **会话 owner** | `assertOwner` | 防止越权访问会话 |
+| **锁 token** | `unlock` Lua | 防止误删他人锁 |
+| **requestId** | `stop` | 防止误停新请求 |
+
+### 11.3 安全风险与防护
+
+| 风险 | 防护 |
+|------|------|
+| **Prompt Injection** | 系统提示强约束 + 工具权限 |
+| **越权工具调用** | 二次校验 + 角色过滤 |
+| **会话劫持** | sessionId + userId 绑定 |
+| **锁误删** | Lua token 比对 |
+| **SSE 连接泄漏** | 5 分钟超时 + 回调清理 |
+| **LLM 脏数据** | `looksLikeId` 检测 |
+| **向量维度攻击** | 维度校验 |
+
+---
+
+## 12. 部署与运维
+
+### 12.1 依赖服务
+
+| 服务 | 版本要求 | 用途 |
+|------|----------|------|
+| **Redis** | 7.0+ | 缓存 + 锁 + 记忆 |
+| **RediSearch** | 2.6+ | 向量索引 |
+| **LLM 网关** | OpenAI 兼容 | 对话 + Embedding |
+
+### 12.2 部署检查清单
+
+- [ ] Redis 已安装 RediSearch 模块
+- [ ] `ai.embedding.dimension` 与实际模型一致
+- [ ] LLM 网关可达（base-url + api-key）
+- [ ] Conscrypt 已安装（TLS 1.3）
+- [ ] 线程池参数已调优
+- [ ] 日志级别合理（生产 INFO）
+
+### 12.3 监控指标
+
+| 指标 | 来源 | 告警阈值 |
+|------|------|----------|
+| 活跃对话数 | `AiChatExecutor.getActiveCount()` | > 14 |
+| 队列长度 | `AiChatExecutor.getQueueSize()` | > 80 |
+| 完成任务数 | `AiChatExecutor.getCompletedTaskCount()` | 监控趋势 |
+| 工具超时率 | 日志统计 | > 5% |
+| LLM 错误率 | 日志统计 | > 1% |
+| Redis 连接数 | Redis 监控 | > 80% |
+
+### 12.4 日志排查
+
+**关键日志标记**：
+
+| 标记 | 含义 | 排查方向 |
+|------|------|----------|
+| `>>> AgentLoop 启动` | 循环开始 | 检查工具数 |
+| `>>> AgentLoop step={}` | 步数 | 检查是否超过 8 |
+| `>>> 路由结果` | 知识库路由 | 检查 score |
+| `>>> 成功获取锁` | 加锁成功 | 检查锁冲突 |
+| `>>> 强制释放旧 Redis 锁` | 会话替换 | 检查并发 |
+| `AiAgentRunner 异常` | 运行异常 | 查看堆栈 |
+| `chatStream 超时或异常` | LLM 超时 | 检查网关 |
+
+### 12.5 常见问题
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| 对话无响应 | LLM 网关不可达 | 检查 base-url/api-key |
+| 记忆不生效 | embedding 维度不符 | 检查配置 |
+| 知识库路由失败 | 缓存为空 | 检查知识库服务 |
+| 锁冲突频繁 | LLM 慢导致锁过期 | 增加锁 TTL 或减少 LLM 延迟 |
+| SSE 连接泄漏 | 客户端未断开 | 检查心跳机制 |
+| 工具超时 | 下游慢 | 增加超时或优化下游 |
+
+---
+
+## 13. 扩展指南
+
+### 13.1 新增工具
+
+**步骤**：
+1. 实现 `AiTool` 接口
+2. 加 `@Component` 注解
+3. 定义 `name` / `description` / `parameterSchema` / `execute`
+4. 定义 `allowedRoles`（默认 `*`）
+5. 定义 `requiresConfirmation`（默认 `false`）
+
+**示例**：
+```java
+@Component
+public class MyTool implements AiTool {
+    @Override public String name() { return "my_tool"; }
+    
+    @Override
+    public String description() {
+        return "工具描述，告诉 LLM 何时调用";
+    }
+    
+    @Override
+    public Map<String, Object> parameterSchema() {
+        return Map.of(
+            "type", "object",
+            "properties", Map.of(
+                "param1", Map.of("type", "string", "description", "参数1")
+            ),
+            "required", List.of("param1")
+        );
+    }
+    
+    @Override
+    public Set<String> allowedRoles() { return Set.of("USER", "ADMIN"); }
+    
+    @Override
+    public boolean requiresConfirmation() { return false; }
+    
+    @Override
+    public ToolResult execute(Map<String, Object> args, AiToolContext ctx) {
+        // 实现逻辑
+        return ToolResult.ok("结果");
+    }
+}
+```
+
+### 13.2 替换历史存储
+
+**步骤**：
+1. 实现 `ChatHistoryStore` 接口
+2. 加 `@Component` 注解
+3. 替换 `InMemoryChatHistoryStore`
+
+**关键方法**：
+- `appendUser` / `appendAssistant`：落库
+- `load`：加载会话消息
+- `loadAssistant`：读取助手回答
+- `exists` / `assertOwner`：会话校验
+
+### 13.3 新增记忆类型
+
+**步骤**：
+1. 修改 `SummaryUtil.ALLOWED_TYPES`
+2. 修改 prompt 中的判断标准
+3. 可选：调整 `MemoryItem` 结构
+
+### 13.4 自定义系统提示
+
+**位置**：`AiAgentRunner.run()` 中 `Message.system(...)`
+
+**建议**：
+- 明确工具使用规则
+- 定义输出格式
+- 处理边界情况
+
+---
+
+## 14. 已知问题与改进建议
+
+### 14.1 已知问题
+
+| 问题 | 位置 | 影响 | 建议 |
+|------|------|------|------|
+| **历史存储内存实现** | `InMemoryChatHistoryStore` | 重启丢失 | 待 PG 表就绪后替换 |
+| **政策状态硬编码** | `InMemoryChatHistoryStore.policyStatus` | 固定返回 | 待政策表就绪 |
+| **AgentLoop.memoryStore 未使用** | `AgentLoop` | 冗余字段 | 移除或预留 |
+| **stop() 与 onCompletion 可能重复清理** | `AiAgentService` | 幂等性 | 已用 `remove(key, value)` 保证 |
+| **LangChain4jLlmClient 完整内容覆盖** | `onCompleteResponse` | 增量与完整不一致 | 需验证模型行为 |
+| **System 消息不裁剪可能超预算** | `ContextBuilder.trimToBudget` | 极端情况 | 可考虑裁剪记忆块 |
+| **工具串行执行** | `AgentLoop` | 多工具慢 | 无依赖时可并行 |
+| **锁 TTL 5s 可能不够** | `AiAgentService.chat` | 长对话锁过期 | 可续期或增大 TTL |
+
+### 14.2 改进建议
+
+#### 14.2.1 短期（1-2 周）
+
+1. **历史存储持久化**：接入 PG
+2. **政策状态完善**：接入政策表
+3. **清理冗余代码**：移除 `AgentLoop.memoryStore`
+4. **监控告警**：接入 Prometheus + Grafana
+
+#### 14.2.2 中期（1-2 月）
+
+1. **工具并行执行**：无依赖工具用 `CompletableFuture.allOf`
+2. **LLM 缓存**：相同问题缓存响应
+3. **锁续期**：长对话自动续期
+4. **记忆预加载**：会话开始批量召回
+5. **上下文压缩**：更激进的摘要策略
+
+#### 14.2.3 长期（3-6 月）
+
+1. **多模型路由**：根据问题类型选模型
+2. **Agent 编排**：多 Agent 协作
+3. **知识图谱**：结构化知识 + 向量混合检索
+4. **RLHF**：基于用户反馈优化
+5. **多模态**：支持图片/语音输入
+
+---
+
+## 15. 附录：接口签名速查
+
+### 15.1 AiAgentService
+
+```java
+public SseEmitter chat(ChatRequest request, String userId);
+public void stop(String sessionId, String userId, String clientRequestId);
+```
+
+### 15.2 AiAgentRunner
+
+```java
+public void run(ChatRequest request, AiToolContext toolContext, String userId,
+                boolean newSession, String sessionId,
+                long userMessageId, long assistantMessageId,
+                Locale locale, String memoryId, String lockKey,
+                String token, AiChatSseEmitter emitter, String runId);
+```
+
+### 15.3 AgentLoop
+
+```java
+public void run(AgentContext ctx);
+```
+
+### 15.4 LlmClient
+
+```java
+LlmResponse chatStream(List<Message> messages, List<ToolSpec> tools, AiChatSseEmitter emitter);
+String chatSimple(String prompt);
+```
+
+### 15.5 MemoryStore
+
+```java
+void save(MemoryItem item);
+List<MemoryItem> searchByUser(String userId, List<Double> queryEmbedding, int topK);
+List<MemoryItem> findByUserAndContentLike(String userId, String keyword);
+void invalidate(String memoryId);
+void decayAll(String userId, double factor);
+void deleteBelow(String userId, double threshold);
+Set<String> getAllActiveUsers();
+```
+
+### 15.6 ChatHistoryStore
+
+```java
+boolean exists(String sessionId);
+void assertOwner(String sessionId, String userId);
+long nextMessageId();
+void append(String sessionId, String userId, long messageId, String role, String content, String extra);
+AiChatPolicyResponse policyStatus(String currentUserId);
+void acceptPolicy(String currentUserId);
+List<AiChatSessionResponse> sessions(String currentUserId);
+String loadAssistant(long assistantMessageId);
+List<Message> load(String sessionId);
+void appendUser(long userMessageId, String sessionId, String userId, String message);
+void appendAssistant(long assistantMessageId, String sessionId, String content);
+```
+
+### 15.7 RedisLockHelper
+
+```java
+boolean tryLock(String key, String token, long ttlMillis);
+void unlock(String key, String token);
+void forceUnlock(String key);
+```
+
+### 15.8 AiChatSseEmitter
+
+```java
+boolean isClosed();
+void setOnCloseCallback(Runnable callback);
+void send(String chunk);
+void send(String eventName, Object data);
+void send(SseEmitter.SseEventBuilder event);
+void complete();
+```
+
+### 15.9 AiChatExecutor
+
+```java
+boolean submit(Runnable task);
+int getActiveCount();
+int getQueueSize();
+long getCompletedTaskCount();
+void shutdown();
+```
+
+### 15.10 AiTool
+
+```java
+String name();
+String description();
+Map<String, Object> parameterSchema();
+ToolResult execute(Map<String, Object> args, AiToolContext ctx);
+default Set<String> allowedRoles() { return Set.of("*"); }
+default boolean requiresConfirmation() { return false; }
+```
+
+### 15.11 ToolRegistry
+
+```java
+AiTool get(String name);
+List<ToolSpec> availableTools(AiToolContext ctx);
+boolean isAllowed(String name, AiToolContext ctx);
+```
+
+### 15.12 AiToolContext
+
+```java
+static AiToolContext capture(String userId, RedisUtils redisUtils);
+static AiToolContext capture(String userId, Set<String> roleSet, RedisUtils redisUtils);
+static void set(AiToolContext context);
+static AiToolContext get();
+static void clear();
+String getUserId();
+RedisUtils getRedisUtils();
+boolean hasRole(String role);
+Set<String> roleSet();
+```
+
+### 15.13 ContextBuilder
+
+```java
+List<Message> build(String sessionId, String newUserMsg, String longTermMemoryBlock);
+```
+
+### 15.14 SummaryUtil
+
+```java
+String summarize(List<Message> messages);
+String summarize(List<Message> messages, int maxWordSize);
+String extractLongTermMemories(String dialog);
+List<Map<String, Object>> extractLongTermMemoriesAsList(String dialog);
+String stripCodeFence(String s);
+```
+
+### 15.15 MemoryExtractor
+
+```java
+@Async("memoryExecutor")
+void extract(String userId, List<Message> turn);
+```
+
+### 15.16 KnowledgeRouter
+
+```java
+Long route(String question);
+List<Long> routeTopN(String question, int n);
+```
+
+### 15.17 PendingStateStore
+
+```java
+void save(AgentContext ctx);
+PendingState load(String runId);
+void remove(String runId);
+```
+
+---
+
+**文档结束**
+
+> 本文档基于 `com.lenovo.ai.*` 全模块代码梳理，如有变更请同步更新。
+> 最后更新：2026-10-10
