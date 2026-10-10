@@ -1,52 +1,70 @@
 package com.lenovo.ai.tools.context;
 
-import com.lenovo.security.utils.RoleUtils;
+import com.lenovo.entity.Role;
+import com.lenovo.config.GlobalBusinessStatusEnum;
 import com.lenovo.util.RedisUtils;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
+/**
+ * 工具执行上下文：携带当前用户 ID 和角色集合，供工具做权限判断。
+ * <p>
+ * 角色从 Redis 直接读取（与 PermissionAspect / RoleUtils 同一来源），
+ * 避免反射调用 RoleUtils.getRoles()。
+ */
+@Slf4j
 public class AiToolContext {
 
     private static final ThreadLocal<AiToolContext> HOLDER = new ThreadLocal<>();
 
     private final String userId;
-    private final RoleUtils roles;
     private final RedisUtils redisUtils;
     private final Set<String> roleSet;
 
-    private AiToolContext(String userId, RoleUtils roles, RedisUtils redisUtils) {
+    private AiToolContext(String userId, RedisUtils redisUtils, Set<String> roleSet) {
         this.userId = userId;
-        this.roles = roles;
         this.redisUtils = redisUtils;
-        this.roleSet = captureRoles(roles);
+        this.roleSet = roleSet;
     }
 
-    public static AiToolContext capture(String userId, RoleUtils roles, RedisUtils redisUtils) {
-        return new AiToolContext(userId, roles, redisUtils);
+    /**
+     * 从 Redis 读取当前用户的真实角色列表，构造 AiToolContext。
+     */
+    public static AiToolContext capture(String userId, RedisUtils redisUtils) {
+        Set<String> roles = loadRolesFromRedis(userId, redisUtils);
+        return new AiToolContext(userId, redisUtils, roles);
     }
 
-    /** 兼容旧调用：手工传入角色集合 */
+    /**
+     * 兼容旧调用：手工传入角色集合（用于测试或特殊场景）。
+     */
     public static AiToolContext capture(String userId, Set<String> roleSet, RedisUtils redisUtils) {
-        AiToolContext ctx = new AiToolContext(userId, null, redisUtils);
-        ctx.roleSet.clear();
-        if (roleSet != null) ctx.roleSet.addAll(roleSet);
-        return ctx;
+        Set<String> roles = roleSet != null ? new HashSet<>(roleSet) : new HashSet<>();
+        return new AiToolContext(userId, redisUtils, roles);
     }
 
-    private static Set<String> captureRoles(RoleUtils roles) {
-        // TODO 根据 RoleUtils 的实际 API 调整；下面只是常见形态
-        // 例如 roles.getRoles() / roles.list() / roles.current()
-        if (roles == null) return new HashSet<>();
+    private static Set<String> loadRolesFromRedis(String userId, RedisUtils redisUtils) {
+        if (userId == null || redisUtils == null) return new HashSet<>();
         try {
-            Object v = roles.getClass().getMethod("getRoles").invoke(roles);
-            if (v instanceof Set<?> s) {
-                Set<String> out = new HashSet<>();
-                for (Object o : s) if (o != null) out.add(String.valueOf(o));
-                return out;
+            String redisKey = userId + GlobalBusinessStatusEnum.REDIS_KEY_USER_ROLE.desc;
+            Object raw = redisUtils.hget(redisKey, userId);
+            if (raw instanceof Role roleContainer) {
+                List<Role> roleList = roleContainer.getRoleList();
+                if (roleList != null && !roleList.isEmpty()) {
+                    return roleList.stream()
+                            .map(Role::getName)
+                            .filter(name -> name != null && !name.isBlank())
+                            .collect(Collectors.toSet());
+                }
             }
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            log.warn("从 Redis 读取用户角色失败: userId={}", userId, e);
+        }
         return new HashSet<>();
     }
 
@@ -55,7 +73,6 @@ public class AiToolContext {
     public static void clear() { HOLDER.remove(); }
 
     public String getUserId() { return userId; }
-    public RoleUtils getRoles() { return roles; }
     public RedisUtils getRedisUtils() { return redisUtils; }
 
     public boolean hasRole(String role) {

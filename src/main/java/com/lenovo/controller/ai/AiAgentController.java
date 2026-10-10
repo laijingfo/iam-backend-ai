@@ -33,7 +33,7 @@ public class AiAgentController {
         return aiAgentService.chat(request, userId);
     }
 
-    public record ChatRequest(String sessionId, String message, String knowledgeId) {}
+    public record ChatRequest(String sessionId, String message, String knowledgeId, String clientRequestId) {}
 
     @GetMapping("/policy")
     public ApiResponse<AiChatPolicyResponse> policy() {
@@ -50,7 +50,7 @@ public class AiAgentController {
     @PostMapping("/chat/stop")
     public Map<String, Object> stopChat(@RequestBody StopRequest request) {
         String userId = SecurityUtils.getCurrentUserId();
-        aiAgentService.stop(request.sessionId(), userId);
+        aiAgentService.stop(request.sessionId(), userId, request.clientRequestId());
         return Map.of("success", true);
     }
 
@@ -59,5 +59,5 @@ public class AiAgentController {
         return ApiResponse.success(history.sessions(SecurityUtils.getCurrentUserId()));
     }
 
-    public record StopRequest(String sessionId) {}
+    public record StopRequest(String sessionId, String clientRequestId) {}
 }

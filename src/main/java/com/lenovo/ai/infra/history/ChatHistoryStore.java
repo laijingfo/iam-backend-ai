@@ -29,5 +29,5 @@ public interface ChatHistoryStore {
 
     void appendUser(long userMessageId, String sessionId, String userId, String message);
 
-    void appendAssistant(long l, String content);
+    void appendAssistant(long assistantMessageId, String sessionId, String content);
 }

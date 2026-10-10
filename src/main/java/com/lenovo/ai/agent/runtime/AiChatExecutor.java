@@ -108,8 +108,14 @@ public final class AiChatExecutor {
         }
     }
 
+    /**
+     * 内部使用：直接执行任务（用于已确认提交成功的场景）
+     * @deprecated 请使用 {@link #submit(Runnable)} 代替，该方法安全处理拒绝异常
+     */
+    @Deprecated
     public void execute(Runnable task) {
-        executor.execute(task);
+        if (task != null) {
+            executor.execute(task);
+        }
     }
-
 }
