@@ -69,12 +69,12 @@ public class KnowledgeRouter {
         return thread;
     });
 
-    @PostConstruct
-    public void init() {
-        long interval = Math.max(1L, refreshMinutes);
-        // 不在启动线程里做远程调用：预热失败也不影响应用启动，后续定时任务会继续自愈
-        refresher.scheduleWithFixedDelay(this::refreshQuietly, 0L, interval, TimeUnit.MINUTES);
-        log.info(">>> KnowledgeRouter 已启动后台向量刷新，间隔 {} 分钟", interval);
+    @PostConstruct                                                                  // 初始化
+    public void init() {                                                            // 方法
+        long interval = Math.max(1L, refreshMinutes);                               // 1. 取刷新间隔（至少 1 分钟）
+        // 不在启动线程里做远程调用：预热失败也不影响应用启动，后续定时任务会继续自愈 // 注释
+        refresher.scheduleWithFixedDelay(this::refreshQuietly, 0L, interval, TimeUnit.MINUTES); // 2. 定时刷新（首次立即）
+        log.info(">>> KnowledgeRouter 已启动后台向量刷新，间隔 {} 分钟", interval);   // 3. 日志
     }
 
     @PreDestroy
@@ -96,33 +96,33 @@ public class KnowledgeRouter {
      *
      * @return true 表示本次确实执行了刷新；false 表示已有线程在刷新，本次直接跳过
      */
-    private boolean refresh() {
-        if (!refreshing.compareAndSet(false, true)) {
-            return false;
+    private boolean refresh() {                                                     // 刷新向量
+        if (!refreshing.compareAndSet(false, true)) {                               // 1. CAS 互斥
+            return false;                                                           //    已有线程在刷新
         }
-        lastAttemptAt = System.currentTimeMillis();
-        try {
-            List<Long> kbIds = getAllKnowledgeBaseIds();
-            int success = 0;
-            for (Long kbId : kbIds) {
-                try {
-                    String desc = buildDescription(kbId);
-                    if (desc == null || desc.isBlank()) continue;
-                    if (desc.length() > MAX_DESC_LENGTH) desc = desc.substring(0, MAX_DESC_LENGTH);
-                    float[] vec = embeddingModel.embed(desc).content().vector();
-                    kbVectors.put(kbId, vec);
-                    kbDescriptions.put(kbId, desc);
-                    success++;
-                    log.debug(">>> 知识库 {} 描述向量已生成，维度：{}", kbId, vec.length);
-                } catch (Exception e) {
-                    log.warn(">>> 知识库 {} 描述向量生成失败，将在下次刷新时重试", kbId, e);
+        lastAttemptAt = System.currentTimeMillis();                                 // 2. 记录尝试时间
+        try {                                                                       // 3. try
+            List<Long> kbIds = getAllKnowledgeBaseIds();                            //    取所有知识库 ID
+            int success = 0;                                                        //    成功计数
+            for (Long kbId : kbIds) {                                               //    遍历
+                try {                                                               //    try
+                    String desc = buildDescription(kbId);                           //    构建描述
+                    if (desc == null || desc.isBlank()) continue;                   //    跳过空
+                    if (desc.length() > MAX_DESC_LENGTH) desc = desc.substring(0, MAX_DESC_LENGTH); // 截断
+                    float[] vec = embeddingModel.embed(desc).content().vector();    //    向量化
+                    kbVectors.put(kbId, vec);                                       //    缓存向量
+                    kbDescriptions.put(kbId, desc);                                 //    缓存描述
+                    success++;                                                      //    计数
+                    log.debug(">>> 知识库 {} 描述向量已生成，维度：{}", kbId, vec.length); // 日志
+                } catch (Exception e) {                                             //    单库失败
+                    log.warn(">>> 知识库 {} 描述向量生成失败，将在下次刷新时重试", kbId, e); // 日志
                 }
             }
-            log.info(">>> KnowledgeRouter 刷新完成，本次成功 {} / 共 {} 个知识库，当前缓存 {} 个",
+            log.info(">>> KnowledgeRouter 刷新完成，本次成功 {} / 共 {} 个知识库，当前缓存 {} 个", // 汇总日志
                     success, kbIds.size(), kbVectors.size());
-            return true;
-        } finally {
-            refreshing.set(false);
+            return true;                                                            //    返回成功
+        } finally {                                                                 // 4. finally
+            refreshing.set(false);                                                  //    释放互斥
         }
     }
 
@@ -140,31 +140,31 @@ public class KnowledgeRouter {
         }
     }
 
-    public Long route(String question) {
-        if (question == null || question.isBlank()) return null;
-        ensureReady();
-        if (kbVectors.isEmpty()) {
-            log.warn(">>> 知识库向量缓存为空，跳过路由，将由调用方走默认知识库");
-            return null;
+    public Long route(String question) {                                            // 路由
+        if (question == null || question.isBlank()) return null;                    // 1. 空返回
+        ensureReady();                                                              // 2. 兜底重建
+        if (kbVectors.isEmpty()) {                                                  // 3. 缓存空
+            log.warn(">>> 知识库向量缓存为空，跳过路由，将由调用方走默认知识库");       //    日志
+            return null;                                                            //    返回 null
         }
-        float[] questionVec = embeddingModel.embed(question).content().vector();
+        float[] questionVec = embeddingModel.embed(question).content().vector();    // 4. 问题向量化
 
-        Long bestKbId = null;
-        double bestScore = -1;
-        for (Map.Entry<Long, float[]> entry : kbVectors.entrySet()) {
-            double score = cosine(questionVec, entry.getValue());
-            if (score > bestScore) {
-                bestScore = score;
-                bestKbId = entry.getKey();
+        Long bestKbId = null;                                                       // 5. 最佳 ID
+        double bestScore = -1;                                                      //    最佳分数
+        for (Map.Entry<Long, float[]> entry : kbVectors.entrySet()) {               // 6. 遍历
+            double score = cosine(questionVec, entry.getValue());                   //    余弦相似度
+            if (score > bestScore) {                                                //    更高
+                bestScore = score;                                                  //    更新
+                bestKbId = entry.getKey();                                          //    更新
             }
         }
 
-        log.info(">>> 路由结果：knowledgeBaseId={}, score={}", bestKbId, bestScore);
-        if (bestScore < MIN_SCORE) {
-            log.warn(">>> 路由相似度低于阈值 {}，不选知识库", MIN_SCORE);
-            return null;
+        log.info(">>> 路由结果：knowledgeBaseId={}, score={}", bestKbId, bestScore);// 7. 日志
+        if (bestScore < MIN_SCORE) {                                                // 8. 低于阈值
+            log.warn(">>> 路由相似度低于阈值 {}，不选知识库", MIN_SCORE);             //    日志
+            return null;                                                            //    返回 null
         }
-        return bestKbId;
+        return bestKbId;                                                            // 9. 返回最佳
     }
 
     public List<Long> routeTopN(String question, int n) {

@@ -134,41 +134,41 @@ public class RedisMemoryStore implements MemoryStore {
     // ===================== 保存 =====================
 
     @Override
-    public void save(MemoryItem item) {
-        String key = key(item.userId(), item.id());
-        byte[] keyBytes = b(key);
-        byte[] embeddingBytes = toFloatBytes(item.embedding());
+    public void save(MemoryItem item) {                                             // 保存记忆
+        String key = key(item.userId(), item.id());                                 // 1. 构造主键
+        byte[] keyBytes = b(key);                                                   //    转字节
+        byte[] embeddingBytes = toFloatBytes(item.embedding());                     // 2. 向量转 float32 字节
 
-        // 1. 主数据：原生 Lettuce 写 Hash
-        try {
-            if (nativeConnection != null) {
-                RedisCommands<byte[], byte[]> cmd = nativeConnection.sync();
-                writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
-                cmd.expire(keyBytes, TTL_SECONDS);
-            } else if (nativeClusterConnection != null) {
-                RedisAdvancedClusterCommands<byte[], byte[]> cmd = nativeClusterConnection.sync();
-                writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
-                cmd.expire(keyBytes, TTL_SECONDS);
-            } else {
-                log.warn(">>> save: 原生连接未初始化");
-                return;
+        // 1. 主数据：原生 Lettuce 写 Hash                                         // 注释
+        try {                                                                       // 3. try
+            if (nativeConnection != null) {                                         //    单机连接
+                RedisCommands<byte[], byte[]> cmd = nativeConnection.sync();        //    同步命令
+                writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);//    写字段
+                cmd.expire(keyBytes, TTL_SECONDS);                                  //    设置 TTL
+            } else if (nativeClusterConnection != null) {                           //    集群连接
+                RedisAdvancedClusterCommands<byte[], byte[]> cmd = nativeClusterConnection.sync(); // 同步
+                writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);//    写字段
+                cmd.expire(keyBytes, TTL_SECONDS);                                  //    设置 TTL
+            } else {                                                                //    未初始化
+                log.warn(">>> save: 原生连接未初始化");                              //    日志
+                return;                                                             //    返回
             }
-        } catch (Exception e) {
-            log.error(">>> 保存记忆主数据失败, key={}", key, e);
-            return;
+        } catch (Exception e) {                                                     // 4. 异常
+            log.error(">>> 保存记忆主数据失败, key={}", key, e);                      //    日志
+            return;                                                                 //    返回
         }
 
-        // 2. 辅助索引：StringRedisTemplate，纯字符串
-        try {
-            String userSetKey = USER_SET_PREFIX + item.userId();
-            String reverseKey = REVERSE_PREFIX + item.id();
+        // 2. 辅助索引：StringRedisTemplate，纯字符串                               // 注释
+        try {                                                                       // 5. try
+            String userSetKey = USER_SET_PREFIX + item.userId();                    //    用户集合 key
+            String reverseKey = REVERSE_PREFIX + item.id();                         //    反向索引 key
 
-            stringRedisTemplate.opsForSet().add(userSetKey, item.id());
-            stringRedisTemplate.expire(userSetKey, TTL_SECONDS, TimeUnit.SECONDS);
+            stringRedisTemplate.opsForSet().add(userSetKey, item.id());             //    加入用户集合
+            stringRedisTemplate.expire(userSetKey, TTL_SECONDS, TimeUnit.SECONDS);  //    设置 TTL
 
-            stringRedisTemplate.opsForValue().set(reverseKey, item.userId(), TTL_SECONDS, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.error(">>> 保存记忆辅助索引失败, userId={}, id={}", item.userId(), item.id(), e);
+            stringRedisTemplate.opsForValue().set(reverseKey, item.userId(), TTL_SECONDS, TimeUnit.SECONDS); // 写反向索引
+        } catch (Exception e) {                                                     // 6. 异常
+            log.error(">>> 保存记忆辅助索引失败, userId={}, id={}", item.userId(), item.id(), e); // 日志
         }
     }
 
@@ -188,39 +188,39 @@ public class RedisMemoryStore implements MemoryStore {
 
     // ===================== 向量检索 =====================
 
-    @Override
-    public List<MemoryItem> searchByUser(String userId, List<Double> queryEmbedding, int topK) {
-        if (queryEmbedding == null || queryEmbedding.isEmpty()) {
-            log.warn(">>> 向量召回跳过：queryEmbedding 为空, userId={}", userId);
-            return List.of();
+    @Override                                                                       // 实现接口
+    public List<MemoryItem> searchByUser(String userId, List<Double> queryEmbedding, int topK) { // KNN 检索
+        if (queryEmbedding == null || queryEmbedding.isEmpty()) {                   // 1. 向量空
+            log.warn(">>> 向量召回跳过：queryEmbedding 为空, userId={}", userId);     //    日志
+            return List.of();                                                       //    返回空
         }
-        if (queryEmbedding.size() != vectorDim) {
-            log.warn(">>> 向量召回跳过：维度不符, 期望={}, 实际={}", vectorDim, queryEmbedding.size());
-            return List.of();
+        if (queryEmbedding.size() != vectorDim) {                                   // 2. 维度不符
+            log.warn(">>> 向量召回跳过：维度不符, 期望={}, 实际={}", vectorDim, queryEmbedding.size()); // 日志
+            return List.of();                                                       //    返回空
         }
 
-        byte[] qBytes = toFloatBytes(queryEmbedding);
-        String query = String.format(
-                "(@userId:{%s} @invalid:{0})=>[KNN %d @embedding $vec AS score]",
-                escapeTag(userId), topK
+        byte[] qBytes = toFloatBytes(queryEmbedding);                               // 3. 向量转字节
+        String query = String.format(                                               // 4. 构造查询
+                "(@userId:{%s} @invalid:{0})=>[KNN %d @embedding $vec AS score]",   //    TAG 过滤 + KNN
+                escapeTag(userId), topK                                             //    用户 ID 转义 + topK
         );
 
-        try {
-            List<byte[]> args = new ArrayList<>();
-            args.add(b("FT.SEARCH"));
-            args.add(b(INDEX_NAME));
-            args.add(b(query));
-            args.add(b("PARAMS"));   args.add(b("2"));
-            args.add(b("vec"));      args.add(qBytes);
-            args.add(b("SORTBY"));   args.add(b("score"));
-            args.add(b("DIALECT"));  args.add(b("2"));
-            args.add(b("LIMIT"));    args.add(b("0")); args.add(b(String.valueOf(topK)));
+        try {                                                                       // 5. try
+            List<byte[]> args = new ArrayList<>();                                  //    参数列表
+            args.add(b("FT.SEARCH"));                                               //    命令
+            args.add(b(INDEX_NAME));                                                //    索引名
+            args.add(b(query));                                                     //    查询
+            args.add(b("PARAMS"));   args.add(b("2"));                              //    PARAMS 2
+            args.add(b("vec"));      args.add(qBytes);                              //    参数 vec
+            args.add(b("SORTBY"));   args.add(b("score"));                          //    排序
+            args.add(b("DIALECT"));  args.add(b("2"));                              //    DIALECT 2
+            args.add(b("LIMIT"));    args.add(b("0")); args.add(b(String.valueOf(topK))); // LIMIT
 
-            Object raw = dispatch("FT.SEARCH", args, OutputType.NESTED);
-            return parseSearchResult(raw);
-        } catch (Exception e) {
-            log.error(">>> 向量召回失败, userId={}", userId, e);
-            return List.of();
+            Object raw = dispatch("FT.SEARCH", args, OutputType.NESTED);            //    派发命令
+            return parseSearchResult(raw);                                          //    解析结果
+        } catch (Exception e) {                                                     // 6. 异常
+            log.error(">>> 向量召回失败, userId={}", userId, e);                      //    日志
+            return List.of();                                                       //    返回空
         }
     }
 
