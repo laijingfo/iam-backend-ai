@@ -23,8 +23,15 @@ public record MemoryItem(
 ) {
     public static MemoryItem of(String userId, String type, String content,
                                 List<Double> embedding, double importance) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("userId 不能为空");
+        }
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("content 不能为空");
+        }
+        double imp = Double.isNaN(importance) || importance < 0 ? 0.5 : Math.min(importance, 1.0);
         long now = System.currentTimeMillis();
         return new MemoryItem(UUID.randomUUID().toString(), userId, type, content,
-                embedding, importance, now, now, false);
+                embedding, imp, now, now, false);
     }
 }

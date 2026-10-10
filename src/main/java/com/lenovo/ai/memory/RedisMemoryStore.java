@@ -17,8 +17,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
@@ -47,16 +47,18 @@ public class RedisMemoryStore implements MemoryStore {
     @Value("${ai.embedding.dimension:1536}")
     private int vectorDim;
 
-    private final RedisTemplate<Object, Object> redisTemplate;
+    /** 主数据（Hash）用原生 Lettuce，裸字节读写 */
     private final LettuceConnectionFactory connectionFactory;
+    /** 辅助 key（Set / String）统一用 StringRedisTemplate，序列化器为 String */
+    private final StringRedisTemplate stringRedisTemplate;
 
     private StatefulRedisConnection<byte[], byte[]> nativeConnection;
     private StatefulRedisClusterConnection<byte[], byte[]> nativeClusterConnection;
 
-    public RedisMemoryStore(RedisTemplate<Object, Object> redisTemplate,
-                            LettuceConnectionFactory connectionFactory) {
-        this.redisTemplate = redisTemplate;
+    public RedisMemoryStore(LettuceConnectionFactory connectionFactory,
+                            StringRedisTemplate stringRedisTemplate) {
         this.connectionFactory = connectionFactory;
+        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     @PostConstruct
@@ -137,6 +139,7 @@ public class RedisMemoryStore implements MemoryStore {
         byte[] keyBytes = b(key);
         byte[] embeddingBytes = toFloatBytes(item.embedding());
 
+        // 1. 主数据：原生 Lettuce 写 Hash
         try {
             if (nativeConnection != null) {
                 RedisCommands<byte[], byte[]> cmd = nativeConnection.sync();
@@ -148,18 +151,27 @@ public class RedisMemoryStore implements MemoryStore {
                 cmd.expire(keyBytes, TTL_SECONDS);
             } else {
                 log.warn(">>> save: 原生连接未初始化");
+                return;
             }
         } catch (Exception e) {
-            log.error(">>> 保存记忆失败, key={}", key, e);
+            log.error(">>> 保存记忆主数据失败, key={}", key, e);
             return;
         }
 
-        redisTemplate.opsForSet().add(USER_SET_PREFIX + item.userId(), item.id());
-        redisTemplate.expire(USER_SET_PREFIX + item.userId(), 90, TimeUnit.DAYS);
-        redisTemplate.opsForValue().set(REVERSE_PREFIX + item.id(), item.userId(), 90, TimeUnit.DAYS);
+        // 2. 辅助索引：StringRedisTemplate，纯字符串
+        try {
+            String userSetKey = USER_SET_PREFIX + item.userId();
+            String reverseKey = REVERSE_PREFIX + item.id();
+
+            stringRedisTemplate.opsForSet().add(userSetKey, item.id());
+            stringRedisTemplate.expire(userSetKey, TTL_SECONDS, TimeUnit.SECONDS);
+
+            stringRedisTemplate.opsForValue().set(reverseKey, item.userId(), TTL_SECONDS, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error(">>> 保存记忆辅助索引失败, userId={}, id={}", item.userId(), item.id(), e);
+        }
     }
 
-    /** ✅ 统一字段写入，单机/集群共用 */
     private void writeFields(BiConsumer<byte[], byte[]> hset, MemoryItem item, byte[] emb) {
         hset.accept(b("id"), b(item.id()));
         hset.accept(b("userId"), b(item.userId()));
@@ -216,55 +228,126 @@ public class RedisMemoryStore implements MemoryStore {
 
     @Override
     public List<MemoryItem> findByUserAndContentLike(String userId, String keyword) {
-        Set<Object> ids = redisTemplate.opsForSet().members(USER_SET_PREFIX + userId);
-        if (ids == null) return List.of();
+        Set<String> ids = stringRedisTemplate.opsForSet().members(USER_SET_PREFIX + userId);
+        if (ids == null || ids.isEmpty()) return List.of();
+
         List<MemoryItem> result = new ArrayList<>();
-        for (Object id : ids) {
-            Map<Object, Object> hash = redisTemplate.opsForHash().entries(key(userId, String.valueOf(id)));
+        for (String id : ids) {
+            Map<String, Object> hash = readHashNative(key(userId, id));
             if (hash.isEmpty() || "1".equals(hash.get("invalid"))) continue;
-            if (String.valueOf(hash.get("content")).contains(keyword)) result.add(toItem(hash));
+            if (String.valueOf(hash.get("content")).contains(keyword)) {
+                result.add(toItem(hash));
+            }
         }
         return result;
     }
 
     @Override
     public void invalidate(String memoryId) {
-        Object userIdObj = redisTemplate.opsForValue().get(REVERSE_PREFIX + memoryId);
-        if (userIdObj == null) return;
-        String k = key(String.valueOf(userIdObj), memoryId);
-        redisTemplate.opsForHash().put(k, "invalid", "1");
-        redisTemplate.opsForHash().put(k, "updatedAt", System.currentTimeMillis());
+        String userId = stringRedisTemplate.opsForValue().get(REVERSE_PREFIX + memoryId);
+        if (userId == null) return;
+
+        String k = key(userId, memoryId);
+        byte[] keyBytes = b(k);
+        try {
+            if (nativeConnection != null) {
+                RedisCommands<byte[], byte[]> cmd = nativeConnection.sync();
+                cmd.hset(keyBytes, b("invalid"), b("1"));
+                cmd.hset(keyBytes, b("updatedAt"), b(String.valueOf(System.currentTimeMillis())));
+            } else if (nativeClusterConnection != null) {
+                RedisAdvancedClusterCommands<byte[], byte[]> cmd = nativeClusterConnection.sync();
+                cmd.hset(keyBytes, b("invalid"), b("1"));
+                cmd.hset(keyBytes, b("updatedAt"), b(String.valueOf(System.currentTimeMillis())));
+            }
+        } catch (Exception e) {
+            log.error(">>> 失效记忆失败, memoryId={}", memoryId, e);
+        }
     }
 
     @Override
     public void decayAll(String userId, double factor) {
-        Set<Object> ids = redisTemplate.opsForSet().members(USER_SET_PREFIX + userId);
-        if (ids == null) return;
-        for (Object id : ids) {
-            String k = key(userId, String.valueOf(id));
-            Map<Object, Object> hash = redisTemplate.opsForHash().entries(k);
+        Set<String> ids = stringRedisTemplate.opsForSet().members(USER_SET_PREFIX + userId);
+        if (ids == null || ids.isEmpty()) return;
+
+        for (String id : ids) {
+            String k = key(userId, id);
+            byte[] keyBytes = b(k);
+            Map<String, Object> hash = readHashNative(k);
             if (hash.isEmpty() || "1".equals(hash.get("invalid"))) continue;
+
             double importance = parseDouble(hash.get("importance"), 0.5);
-            redisTemplate.opsForHash().put(k, "importance", importance * factor);
-            redisTemplate.opsForHash().put(k, "updatedAt", System.currentTimeMillis());
+            try {
+                if (nativeConnection != null) {
+                    RedisCommands<byte[], byte[]> cmd = nativeConnection.sync();
+                    cmd.hset(keyBytes, b("importance"), b(String.valueOf(importance * factor)));
+                    cmd.hset(keyBytes, b("updatedAt"), b(String.valueOf(System.currentTimeMillis())));
+                } else if (nativeClusterConnection != null) {
+                    RedisAdvancedClusterCommands<byte[], byte[]> cmd = nativeClusterConnection.sync();
+                    cmd.hset(keyBytes, b("importance"), b(String.valueOf(importance * factor)));
+                    cmd.hset(keyBytes, b("updatedAt"), b(String.valueOf(System.currentTimeMillis())));
+                }
+            } catch (Exception e) {
+                log.warn(">>> decay 失败, key={}", k, e);
+            }
         }
     }
 
     @Override
     public void deleteBelow(String userId, double threshold) {
-        Set<Object> ids = redisTemplate.opsForSet().members(USER_SET_PREFIX + userId);
-        if (ids == null) return;
-        for (Object id : ids) {
-            String k = key(userId, String.valueOf(id));
-            Map<Object, Object> hash = redisTemplate.opsForHash().entries(k);
+        Set<String> ids = stringRedisTemplate.opsForSet().members(USER_SET_PREFIX + userId);
+        if (ids == null || ids.isEmpty()) return;
+
+        for (String id : ids) {
+            String k = key(userId, id);
+            Map<String, Object> hash = readHashNative(k);
             if (hash.isEmpty() || "1".equals(hash.get("invalid"))) continue;
+
             double importance = parseDouble(hash.get("importance"), 0.5);
             if (importance < threshold) {
-                redisTemplate.delete(k);
-                redisTemplate.opsForSet().remove(USER_SET_PREFIX + userId, id);
-                redisTemplate.delete(REVERSE_PREFIX + id);
+                try {
+                    if (nativeConnection != null) {
+                        nativeConnection.sync().del(b(k));
+                    } else if (nativeClusterConnection != null) {
+                        nativeClusterConnection.sync().del(b(k));
+                    }
+                    stringRedisTemplate.opsForSet().remove(USER_SET_PREFIX + userId, id);
+                    stringRedisTemplate.delete(REVERSE_PREFIX + id);
+                } catch (Exception e) {
+                    log.warn(">>> 删除低分记忆失败, key={}", k, e);
+                }
             }
         }
+    }
+
+    // ===================== 原生 Hash 读取 =====================
+
+    /**
+     * 用原生 Lettuce 读整个 Hash，返回 String -> String（embedding 字段以 Base64 或跳过）
+     */
+    private Map<String, Object> readHashNative(String key) {
+        byte[] keyBytes = b(key);
+        Map<String, Object> result = new HashMap<>();
+        try {
+            Map<byte[], byte[]> raw;
+            if (nativeConnection != null) {
+                raw = nativeConnection.sync().hgetall(keyBytes);
+            } else if (nativeClusterConnection != null) {
+                raw = nativeClusterConnection.sync().hgetall(keyBytes);
+            } else {
+                return result;
+            }
+            if (raw == null || raw.isEmpty()) return result;
+
+            for (Map.Entry<byte[], byte[]> e : raw.entrySet()) {
+                String field = new String(e.getKey(), StandardCharsets.UTF_8);
+                // embedding 是二进制，读出来没意义，跳过
+                if ("embedding".equals(field)) continue;
+                result.put(field, new String(e.getValue(), StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            log.warn(">>> 读取 Hash 失败, key={}", key, e);
+        }
+        return result;
     }
 
     // ===================== 派发 =====================
@@ -310,7 +393,6 @@ public class RedisMemoryStore implements MemoryStore {
         return buf.array();
     }
 
-    /** ✅ 统一的 MemoryItem 构造 */
     private MemoryItem toItem(Map<?, ?> hash) {
         return new MemoryItem(
                 String.valueOf(hash.get("id")),
@@ -357,22 +439,17 @@ public class RedisMemoryStore implements MemoryStore {
     @Override
     public Set<String> getAllActiveUsers() {
         try {
-            // 使用 RedisTemplate 的 scan 方法扫描所有 USER_SET_PREFIX 开头的 key
             java.util.Set<String> activeUsers = new java.util.HashSet<>();
             String pattern = USER_SET_PREFIX + "*";
-            
-            // 配置扫描选项
-            ScanOptions scanOptions = 
-                ScanOptions.scanOptions()
+
+            ScanOptions scanOptions = ScanOptions.scanOptions()
                     .match(pattern)
                     .count(100)
                     .build();
-            
-            // 使用 RedisTemplate 的 scan 进行遍历，返回 Cursor
-            redisTemplate.execute((RedisCallback<Void>) connection -> {
-                Cursor<byte[]> cursor = 
-                    connection.keyCommands().scan(scanOptions);
-                
+
+            // 用 StringRedisTemplate 扫，与写入序列化器保持一致
+            stringRedisTemplate.execute((RedisCallback<Void>) connection -> {
+                Cursor<byte[]> cursor = connection.keyCommands().scan(scanOptions);
                 try {
                     while (cursor.hasNext()) {
                         byte[] keyBytes = cursor.next();
@@ -387,13 +464,11 @@ public class RedisMemoryStore implements MemoryStore {
                         }
                     }
                 } finally {
-                    if (cursor != null) {
-                        cursor.close();
-                    }
+                    if (cursor != null) cursor.close();
                 }
                 return null;
             });
-            
+
             log.info(">>> 获取活跃用户成功，共 {} 个", activeUsers.size());
             return activeUsers;
         } catch (Exception e) {
