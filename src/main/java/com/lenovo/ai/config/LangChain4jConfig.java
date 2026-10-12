@@ -5,6 +5,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,7 @@ import org.springframework.context.annotation.Configuration;
 import javax.net.ssl.SSLContext;
 import java.security.Security;
 import java.time.Duration;
+import java.util.Map;
 
 /**
  * LangChain4j 模型 Bean 统一配置：ChatModel / StreamingChatModel / EmbeddingModel。
@@ -46,6 +48,12 @@ public class LangChain4jConfig {
     @Value("${langchain4j.open-ai.chat-model.model-name:qwen3-max}")
     private String chatModelName;
 
+    @Value("${langchain4j.open-ai.chat-model.temperature:0.3}")
+    private double chatTemperature;
+
+    @Value("${langchain4j.open-ai.chat-model.enable-thinking:false}")
+    private boolean chatEnableThinking;
+
     @Value("${langchain4j.open-ai.streaming-chat-model.model-name:qwen3-max}")
     private String streamingChatModelName;
 
@@ -72,9 +80,15 @@ public class LangChain4jConfig {
      */
     @Bean
     public ChatModel chatModel() {
+        OpenAiChatRequestParameters requestParameters = OpenAiChatRequestParameters.builder()
+                .modelName(chatModelName)
+                .temperature(chatTemperature)
+                .customParameters(Map.of("enable_thinking", chatEnableThinking))
+                .build();
         return OpenAiChatModel.builder()
                 .httpClientBuilder(newHttpClientBuilder())
                 .baseUrl(baseUrl).apiKey(apiKey).modelName(chatModelName)
+                .defaultRequestParameters(requestParameters)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
                 .maxRetries(maxRetries)
                 .logRequests(logRequests).logResponses(logResponses)

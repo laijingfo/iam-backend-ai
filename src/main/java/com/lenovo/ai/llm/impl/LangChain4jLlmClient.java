@@ -19,6 +19,7 @@ import dev.langchain4j.model.chat.ChatModel;                                    
 import dev.langchain4j.model.chat.StreamingChatModel;                           // L4j 流式模型
 import dev.langchain4j.model.chat.request.ChatRequest;                          // L4j 聊天请求
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;                // L4j JSON Schema
+import dev.langchain4j.exception.InternalServerException;                       // L4j 内部服务器异常
 import dev.langchain4j.model.chat.response.ChatResponse;                        // L4j 聊天响应
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;        // L4j 流式回调
 import lombok.extern.slf4j.Slf4j;                                               // 日志
@@ -39,6 +40,9 @@ import java.util.concurrent.TimeUnit;                                           
 public class LangChain4jLlmClient implements LlmClient {                        // 实现类
 
     private static final int STREAM_TIMEOUT_SECONDS = 120;                      // 流式调用超时（秒）
+    private static final int CHAT_SIMPLE_MAX_RETRIES = 3;                       // chatSimple 空 choices 最大重试次数
+    private static final long CHAT_SIMPLE_RETRY_BACKOFF_MS = 500;               // chatSimple 重试初始间隔（毫秒）
+    private static final int LOG_RESP_PREVIEW_LEN = 500;                        // ✅ chatSimple 返回日志截断长度
     private static final ObjectMapper MAPPER = new ObjectMapper();              // 共享 JSON 序列化器
 
     private final StreamingChatModel streamingModel;                            // 流式模型
@@ -115,18 +119,71 @@ public class LangChain4jLlmClient implements LlmClient {                        
     @Override                                                                   // 实现接口
     public String chatSimple(String prompt) {                                   // 非流式简单调用
         if (prompt == null || prompt.isBlank()) return "";                      // 1. 空入参返回空
-        try {                                                                   // 2. try
-            ChatMessage userMsg = UserMessage.from(prompt);                     //    构造用户消息
-            ChatRequest request = ChatRequest.builder()                         //    构造请求
-                    .messages(List.of(userMsg))                                 //    消息列表
-                    .build();                                                   //    构建
-            ChatResponse response = chatModel.chat(request);                    //    调用模型
-            AiMessage aiMessage = response.aiMessage();                         //    取 AI 消息
-            return aiMessage.text() != null ? aiMessage.text() : "";            //    返回文本
-        } catch (Exception e) {                                                 // 3. 异常
-            log.error("chatSimple 异常: {}", prompt.length(), e);                //    日志
-            return "";                                                          //    返回空
+        int maxAttempts = CHAT_SIMPLE_MAX_RETRIES + 1;                          // 2. 总尝试次数
+        InternalServerException lastException = null;                           //    最后一次内部异常
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {              // 3. 重试循环
+            try {                                                               //    try
+                ChatMessage userMsg = UserMessage.from(prompt);                 //       构造用户消息
+                ChatRequest request = ChatRequest.builder()                     //       构造请求
+                        .messages(List.of(userMsg))                             //       消息列表
+                        .build();                                               //       构建
+                ChatResponse response = chatModel.chat(request);                //       调用模型
+                AiMessage aiMessage = response.aiMessage();                     //       取 AI 消息
+
+                // ✅【新增】防御 aiMessage 为 null（上游异常时可能返回 null）
+                if (aiMessage == null) {                                        //       aiMessage 为空
+                    log.warn(">>> chatSimple aiMessage 为 null，attempt={}/{}, promptLen={}",
+                            attempt, maxAttempts, prompt.length());
+                    if (attempt < maxAttempts) {                                //          还能重试
+                        long sleepMs = CHAT_SIMPLE_RETRY_BACKOFF_MS * (1L << (attempt - 1));
+                        try { Thread.sleep(sleepMs); } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        continue;                                               //          继续下一次
+                    }
+                    return "";                                                  //          最后一次，返回空
+                }
+
+                String text = aiMessage.text() != null ? aiMessage.text() : ""; //      获取文本
+
+                // ✅【新增】打印 LLM 返回原文（截断），排查"返回 []"或"返回脏数据"
+                log.info(">>> chatSimple 返回, promptLen={}, respLen={}, resp={}",
+                        prompt.length(), text.length(),
+                        text.length() <= LOG_RESP_PREVIEW_LEN
+                                ? text
+                                : text.substring(0, LOG_RESP_PREVIEW_LEN) + "...(truncated)");
+
+                if (attempt > 1) {                                              //       重试后成功
+                    log.info(">>> chatSimple 重试成功，第 {}/{} 次", attempt, maxAttempts);
+                }
+                return text;                                                    //       返回文本
+            } catch (InternalServerException e) {                               //    上游模型异常（含空 choices）
+                lastException = e;                                              //      记录最后一次异常
+                boolean willRetry = attempt < maxAttempts;                      //      是否继续重试
+                // ✅【修复】异常作为最后一个参数且不占 {}，才会打印完整堆栈
+                log.warn(">>> chatSimple 调用失败（可能上游返回空 choices），尝试 {}/{}，prompt 长度={}，是否继续重试={}",
+                        attempt, maxAttempts, prompt.length(), willRetry, e);
+                if (!willRetry) {                                               //      最后一次失败，跳出
+                    break;
+                }
+                long sleepMs = CHAT_SIMPLE_RETRY_BACKOFF_MS * (1L << (attempt - 1)); // 指数退避：500, 1000, 2000
+                try {                                                           //      短暂等待再重试
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException ie) {                             //      线程被中断
+                    Thread.currentThread().interrupt();                         //         恢复中断标志
+                    log.warn(">>> chatSimple 重试等待被中断");
+                    break;                                                      //         中断退出循环
+                }
+            } catch (Exception e) {                                             //    其它异常不重试
+                // ✅【修复】异常放最后且不占 {}，堆栈才能打出来
+                log.error("chatSimple 异常, promptLen={}", prompt.length(), e);
+                return "";                                                      //    返回空
+            }
         }
+        // ✅【修复】lastException 作为最后一个参数，堆栈能打出来
+        log.error(">>> chatSimple 在 {} 次尝试后仍失败，返回空", maxAttempts, lastException);
+        return "";                                                              // 返回空，避免影响上层
     }
 
     /**                                                                         // Javadoc

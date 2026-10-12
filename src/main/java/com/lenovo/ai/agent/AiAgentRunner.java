@@ -42,11 +42,19 @@ public class AiAgentRunner {                                                    
                     Locale locale, String memoryId, String lockKey,
                     String token, AiChatSseEmitter emitter, String runId) {     // 参数：请求/工具上下文/用户/session/消息ID/语言/记忆ID/锁/SSE/运行ID
         try {                                                                   // 主流程 try，异常兜底
+
+            // ✅【新增】打印本轮用户输入原文，排查脏数据/传参污染
+            log.info(">>> 本轮用户输入原文: [{}], userId={}, sessionId={}, runId={}",
+                    request.message(), userId, sessionId, runId);
+
             history.appendUser(userMessageId, sessionId, userId, request.message()); // 1. 落库本轮 user 消息（后续 history.load 会包含它）
 
             // 长期记忆召回：用本轮问题做向量检索，把召回结果拼进系统上下文。       // 注释：记忆召回说明
             List<Double> qVec = embeddingClient.embed(request.message());       // 2. 将用户问题向量化
             List<MemoryItem> memories = memoryStore.searchByUser(userId, qVec, 5);// 3. 从用户记忆中 KNN 召回 top5
+            log.info(">>> 记忆召回: userId={}, 召回 {} 条, 内容={}",
+                    userId, memories.size(),
+                    memories.stream().map(MemoryItem::content).toList());   // ← 加日志
             String memoryBlock = memories.stream()                              // 4. 将召回记忆拼成文本块
                     .map(m -> "- " + m.content())                               //    每条前缀 "- "
                     .collect(Collectors.joining("\n"));                         //    换行拼接
@@ -76,7 +84,7 @@ public class AiAgentRunner {                                                    
                     .anyMatch(m -> m.role() == com.lenovo.ai.llm.enums.MessageRole.USER // 角色为 USER
                             && request.message().equals(m.content()));          //    且内容匹配
             if (!containsCurrent) {                                                 // 8. 若未包含
-                log.debug("历史消息不包含本轮问题，显式补充");                        //    仅打 debug 日志（ContextBuilder 已兜底，无需重复添加）
+                log.info("历史消息不包含本轮问题，显式补充");                        //    仅打 debug 日志（ContextBuilder 已兜底，无需重复添加）
             }
 
             AgentContext ctx = new AgentContext(                                // 9. 构造运行上下文
@@ -89,7 +97,26 @@ public class AiAgentRunner {                                                    
                     Message.user(request.message()),                            //    用户消息
                     Message.assistant(history.loadAssistant(assistantMessageId))//    助手回答（从存储读取）
             );
+
+            // ✅【新增】打印即将送入记忆抽取的对话内容，确认不是脏数据
+            log.info(">>> 准备抽取记忆的对话内容: userId={}, turn={}",
+                    userId,
+                    turn.stream()
+                            .map(m -> m.role() + ": " + m.content())
+                            .collect(Collectors.joining(" | ")));
+
             memoryExtractor.extract(userId, turn);                              // 12. 异步抽取（@Async memoryExecutor）
+
+            // ❌【删除】下面的 Thread.sleep 是错的：@Async 是异步的，主线程 sleep 等不到它，
+            //            反而拖慢每个 HTTP 请求 1.5 秒，高并发下线程池会被占满。
+            // try { Thread.sleep(1500); } catch (InterruptedException e) {
+            //     Thread.currentThread().interrupt();
+            // }
+            // log.info(">>> 等待记忆保存完成：userId={}, sessionId={}, 耗时 1500ms", userId, sessionId);
+
+            // ✅【替换为】只打一条日志，不阻塞请求线程
+            log.info(">>> 记忆抽取已异步提交：userId={}, sessionId={}, runId={}",
+                    userId, sessionId, runId);
 
         } catch (Exception e) {                                                 // 13. 异常兜底
             log.error("AiAgentRunner 异常，runId={}", runId, e);                 //    记录错误日志

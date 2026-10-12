@@ -19,6 +19,14 @@ public interface MemoryStore {
     void deleteBelow(String userId, double threshold);
     
     /**
+     * 查找用户的所有记忆（用于调试）
+     */
+    default List<MemoryItem> findAllByUser(String userId) {
+        // 默认返回空列表，子类可覆盖
+        return List.of();
+    }
+    
+    /**
      * 获取所有活跃用户的 ID 列表（有记忆记录的用户）
      * @return 活跃用户 ID 集合，未实现时抛出 UnsupportedOperationException
      */

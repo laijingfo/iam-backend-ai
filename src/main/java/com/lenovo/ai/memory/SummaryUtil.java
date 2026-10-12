@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SummaryUtil {
 
-    private static final Set<String> ALLOWED_TYPES = Set.of("PREFERENCE", "FACT", "ENTITY");
+    private static final Set<String> ALLOWED_TYPES = Set.of("PREFERENCE", "FACT", "ENTITY", "QUESTION");
     private static final String CACHE_PREFIX = "ai:summary:";
     private static final int LOG_PREVIEW_LEN = 300;
 
@@ -107,6 +107,14 @@ public class SummaryUtil {
      * <p>
      * 契约：<b>永远返回合法 JSON 数组字符串</b>（无内容时返回 "[]"）。
      * 任何异常、非数组、字段非法的情况都归零为 "[]"。
+     *
+     * 抽取标准：
+     * - PREFERENCE: 用户偏好（语言风格、回答方式、习惯等）
+     * - FACT: 关于用户的稳定事实（部门、职位、角色、常用系统等）
+     * - ENTITY: 用户关注的具体对象（系统名、项目名、业务领域等）
+     * - QUESTION: 用户反复询问或持续关注的主题（如审核流程、权限管理等）
+     *
+     * 注意：如果用户多次询问同一主题的问题，应抽取为 QUESTION 类型记忆
      */
     public String extractLongTermMemories(String dialog) {
         List<Map<String, Object>> items = extractLongTermMemoriesAsList(dialog);
@@ -126,20 +134,31 @@ public class SummaryUtil {
      */
     public List<Map<String, Object>> extractLongTermMemoriesAsList(String dialog) {
         if (dialog == null || dialog.isBlank()) {
+            log.warn(">>> [记忆抽取] dialog 为空，跳过");
             return Collections.emptyList();
         }
+
+        // ✅【新增】打印送入 LLM 的对话原文（截断）
+        log.info(">>> [记忆抽取] 开始, dialogLen={}, dialog={}",
+                dialog.length(), preview(dialog));
 
         String prompt = """
             从以下对话中抽取值得长期记住的用户信息。
             只输出 JSON 数组，不要任何解释。格式：
-            [{"type":"PREFERENCE|FACT|ENTITY","content":"...","importance":0.0~1.0}]
+            [{"type":"PREFERENCE|FACT|ENTITY|QUESTION","content":"...","importance":0.0~1.0}]
             没有值得记住的信息则输出 []。
             
             判断标准：
             - PREFERENCE: 用户偏好（语言、风格、习惯）
             - FACT: 关于用户的稳定事实（部门、职位、常用系统）
             - ENTITY: 用户关注的具体对象（项目名、系统名）
-            临时性问题不要抽取。
+            - QUESTION: 用户询问或持续关注的业务主题（如审核流程、权限管理、审批规则等）
+            
+            注意：
+            1. 即使用户只问了一次，只要是**具体业务主题**（不是寒暄、不是闲聊），
+               就应抽取为 QUESTION 类型，content 写清楚"用户关注 XXX 主题"。
+            2. 只有纯粹的寒暄（如"你好""谢谢"）和与业务无关的闲聊才不抽取。
+            3. 不要把助手回答的内容当作记忆，只记"用户关注什么"。
             
             对话：
             %s
@@ -149,18 +168,27 @@ public class SummaryUtil {
         try {
             raw = llmClient.chatSimple(prompt);
         } catch (Exception e) {
-            log.warn(">>> LLM 抽取记忆调用失败：{}", e.getMessage(), e);
+            log.warn(">>> [记忆抽取] LLM 调用失败：{}", e.getMessage(), e);
             return Collections.emptyList();
         }
 
+        // ✅【新增】打印 LLM 原始返回
+        log.info(">>> [记忆抽取] LLM 原始返回, rawLen={}, raw={}",
+                raw == null ? 0 : raw.length(), preview(raw));
+
         String cleaned = stripCodeFence(raw);
         if (cleaned == null || cleaned.isBlank()) {
-            log.debug(">>> LLM 抽取记忆返回空");
+            log.warn(">>> [记忆抽取] stripCodeFence 后为空, raw={}", preview(raw));
             return Collections.emptyList();
         }
+
+        // ✅【新增】打印清洗后的内容
+        log.info(">>> [记忆抽取] 清洗后, cleanedLen={}, cleaned={}",
+                cleaned.length(), preview(cleaned));
+
         // 必须是以 [ 开头的数组，否则视为脏数据（例如网关返回了 requestId）
         if (!cleaned.startsWith("[")) {
-            log.warn(">>> 抽取记忆返回非 JSON 数组，丢弃。raw={}", preview(raw));
+            log.warn(">>> [记忆抽取] 返回非 JSON 数组，丢弃。cleaned={}", preview(cleaned));
             return Collections.emptyList();
         }
 
@@ -169,18 +197,30 @@ public class SummaryUtil {
             items = objectMapper.readValue(cleaned,
                     new TypeReference<List<Map<String, Object>>>() {});
         } catch (Exception e) {
-            log.warn(">>> 抽取记忆 JSON 解析失败：{} | raw={}", e.getMessage(), preview(raw));
+            log.warn(">>> [记忆抽取] JSON 解析失败：{} | cleaned={}",
+                    e.getMessage(), preview(cleaned));
             return Collections.emptyList();
         }
+
         if (items == null || items.isEmpty()) {
+            // ✅【关键】明确区分"LLM 判定无信息"和"被过滤"，
+            //    这一步是合法返回 []，不是错误，打 info 而非 warn
+            log.info(">>> [记忆抽取] LLM 判定没有值得长期记住的信息（返回 []），dialog={}",
+                    preview(dialog));
             return Collections.emptyList();
         }
 
         // 逐条校验并规范化
-        return items.stream()
+        List<Map<String, Object>> valid = items.stream()
                 .filter(this::isValidItem)
                 .peek(this::normalizeItem)
                 .collect(Collectors.toList());
+
+        // ✅【新增】对比过滤前后数量，定位"是不是全被 isValidItem 拦了"
+        log.info(">>> [记忆抽取] 完成, 原始条数={}, 有效条数={}, items={}",
+                items.size(), valid.size(), valid);
+
+        return valid;
     }
 
     private boolean isValidItem(Map<String, Object> it) {
