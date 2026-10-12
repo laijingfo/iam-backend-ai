@@ -5,7 +5,6 @@ import com.lenovo.ai.infra.sse.AiChatSseEmitter;                                
 import com.lenovo.ai.llm.LlmClient;                                             // LLM 客户端接口
 import com.lenovo.ai.llm.LlmResponse;                                           // LLM 响应
 import com.lenovo.ai.llm.Message;                                               // 消息模型
-import com.lenovo.ai.memory.MemoryStore;                                        // 记忆存储（当前未使用，可能预留）
 import com.lenovo.ai.tools.AiTool;                                              // 工具接口
 import com.lenovo.ai.tools.ToolRegistry;                                        // 工具注册表
 import com.lenovo.ai.tools.ToolResult;                                          // 工具结果
@@ -33,7 +32,6 @@ public class AgentLoop {                                                        
     private final ToolRegistry toolRegistry;                                    // 工具注册表
     private final ChatHistoryStore history;                                     // 历史存储
     private final PendingStateStore pendingStateStore;                          // 挂起状态存储（需确认工具）
-    private final MemoryStore memoryStore;                                      // 记忆存储（当前未使用）
 
     /**                                                                         // Javadoc
      * 运行 Agent 循环。                                                          // 说明
@@ -41,23 +39,31 @@ public class AgentLoop {                                                        
     public void run(AgentContext ctx) {                                         // 入口方法
         try {                                                                   // 主流程 try
             List<Message> messages = new ArrayList<>(ctx.messages());           // 1. 拷贝消息列表（避免外部修改）
-            List<ToolSpec> tools = toolRegistry.availableTools(ctx.toolContext());// 2. 按角色过滤可用工具
-            log.info(">>> AgentLoop 启动, runId={}, 可用工具 {} 个", ctx.runId(), tools.size()); // 日志
 
-            for (int step = 0; step < MAX_STEPS; step++) {                      // 3. 循环最多 MAX_STEPS 次
+            // 【改】按角色 + Agent 白名单双重过滤工具
+            List<ToolSpec> tools = toolRegistry.availableTools(
+                    ctx.toolContext(), ctx.allowedToolNames());
+
+            log.info(">>> AgentLoop 启动, runId={}, agent={}, 可用工具 {} 个",
+                    ctx.runId(), ctx.agentName(), tools.size()); // 日志
+
+            // 【改】动态 maxSteps：优先用 ctx 上的（由 Agent 设定），否则用默认
+            int maxSteps = ctx.maxSteps() > 0 ? ctx.maxSteps() : MAX_STEPS;
+
+            for (int step = 0; step < maxSteps; step++) {                       // 3. 循环最多 maxSteps 次
                 // SSE 连接已关闭（被 stop 或新请求取代），立即退出                 //    提前退出条件
                 if (ctx.emitter().isClosed()) {                                 // 4. 检测 SSE 是否关闭
                     log.info(">>> AgentLoop 检测到 SSE 已关闭, runId={}, step={}", ctx.runId(), step); // 日志
                     return;                                                     //    直接返回
                 }
-                log.info(">>> AgentLoop step={}, runId={}", step, ctx.runId()); // 5. 记录步数
+                log.info(">>> AgentLoop step={}, runId={}, agent={}", step, ctx.runId(), ctx.agentName()); // 5. 记录步数
 
                 LlmResponse resp = llmClient.chatStream(messages, tools, ctx.emitter()); // 6. 流式调用 LLM
 
                 if (!resp.hasToolCalls()) {                                     // 7. 若无工具调用 → 最终答案
                     history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), resp.content()); // 7.1 落库 assistant 消息
                     sendEvent(ctx.emitter(), "done", Map.of("messageId", ctx.assistantMessageId())); // 7.2 发送 done 事件
-                    ctx.emitter().complete();                                   // 7.3 关闭 SSE
+                    ctx.emitter().complete();                                   // 7.3 关闭 SSE（内部 Agent 会被 suppressComplete 拦住）
                     return;                                                     // 7.4 结束
                 }
 
@@ -90,7 +96,7 @@ public class AgentLoop {                                                        
                                 "tool", call.name(),                            //    工具名
                                 "args", call.args()                             //    参数
                         ));
-                        ctx.emitter().complete();                               //    关闭 SSE（等待用户确认后恢复）
+                        ctx.emitter().complete();                               //    关闭 SSE（等待用户确认后恢复；内部 Agent 会被 suppressComplete 拦住）
                         return;                                                 //    结束本次 run
                     }
 
@@ -118,7 +124,7 @@ public class AgentLoop {                                                        
             ctx.emitter().complete();                                           // 12. 关闭 SSE
 
         } catch (Exception e) {                                                 // 13. 异常兜底
-            log.error("AgentLoop 异常, runId={}", ctx.runId(), e);              //    日志
+            log.error("AgentLoop 异常, runId={}, agent={}", ctx.runId(), ctx.agentName(), e); //    日志
             try {                                                               //    尝试发送 error 事件
                 sendEvent(ctx.emitter(), "error", Map.of(                       //    发送 error
                         "code", "INTERNAL_ERROR",                                   //    错误码
@@ -126,7 +132,7 @@ public class AgentLoop {                                                        
                 ));
             } catch (Exception ignored) {}                                      //    忽略发送异常
             try {                                                               //    尝试关闭 SSE
-                ctx.emitter().complete();                                       //    关闭
+                ctx.emitter().complete();                                       //    关闭（内部 Agent 会被 suppressComplete 拦住）
             } catch (Exception ignored) {}                                      //    忽略异常
         }
     }

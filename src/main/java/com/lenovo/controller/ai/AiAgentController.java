@@ -1,5 +1,6 @@
 package com.lenovo.controller.ai;
 
+import com.lenovo.ai.agent.ChatRequest;
 import com.lenovo.ai.infra.history.ChatHistoryStore;
 import com.lenovo.dto.AiChatPolicyResponse;
 import com.lenovo.dto.AiChatSessionResponse;
@@ -32,8 +33,6 @@ public class AiAgentController {
         // ✅ 每次请求都会 new 一个 emitter，绝不缓存
         return aiAgentService.chat(request, userId);
     }
-
-    public record ChatRequest(String sessionId, String message, String knowledgeId, String clientRequestId) {}
 
     @GetMapping("/policy")
     public ApiResponse<AiChatPolicyResponse> policy() {

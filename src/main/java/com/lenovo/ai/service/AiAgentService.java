@@ -1,198 +1,213 @@
-package com.lenovo.ai.service;                                                  // 包声明
+package com.lenovo.ai.service;
 
-import com.lenovo.ai.agent.AiAgentRunner;                                       // Agent 运行器
-import com.lenovo.ai.agent.runtime.AiChatExecutor;                              // AI 专用线程池
-import com.lenovo.ai.infra.history.ChatHistoryStore;                            // 历史存储
-import com.lenovo.ai.infra.lock.RedisLockHelper;                                // Redis 锁
-import com.lenovo.ai.infra.sse.AiChatSseEmitter;                                // SSE 发射器
-import com.lenovo.ai.tools.context.AiToolContext;                               // 工具上下文
-import com.lenovo.controller.ai.AiAgentController.ChatRequest;                  // 请求体
-import com.lenovo.util.RedisUtils;                                              // Redis 工具
-import lombok.extern.slf4j.Slf4j;                                               // 日志
-import org.springframework.context.i18n.LocaleContextHolder;                    // 国际化上下文
-import org.springframework.stereotype.Service;                                  // Spring 服务
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;        // SSE 基类
+import com.lenovo.ai.agent.AiAgentRunner;
+import com.lenovo.ai.agent.ChatRequest;
+import com.lenovo.ai.agent.runtime.AiChatExecutor;
+import com.lenovo.ai.infra.history.ChatHistoryStore;
+import com.lenovo.ai.infra.lock.RedisLockHelper;
+import com.lenovo.ai.infra.sse.AiChatSseEmitter;
+import com.lenovo.ai.tools.context.AiToolContext;
+import com.lenovo.util.RedisUtils;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.Locale;                                                        // 语言
-import java.util.Map;                                                           // Map
-import java.util.UUID;                                                          // UUID
-import java.util.concurrent.ConcurrentHashMap;                                  // 并发 Map
+import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
-@Slf4j                                                                          // 日志
-@Service                                                                        // 注册服务
-public class AiAgentService {                                                   // 对话服务入口
+@Slf4j
+@Service
+public class AiAgentService {
 
-    private final ChatHistoryStore history;                                     // 历史存储
-    private final RedisLockHelper redisLockHelper;                              // 锁工具
-    private final RedisUtils redisUtils;                                        // Redis 工具
-    private final AiChatExecutor chatExecutor;                                  // AI 线程池
-    private final AiAgentRunner runner;                                         // Agent 运行器
+    private final ChatHistoryStore history;
+    private final RedisLockHelper redisLockHelper;
+    private final RedisUtils redisUtils;
+    private final AiChatExecutor chatExecutor;
+    private final AiAgentRunner runner;
 
-    private final Map<String, AiChatSseEmitter> runningEmitters = new ConcurrentHashMap<>(); // memoryId → 当前 emitter
-    private final Map<String, String> runningRunIds = new ConcurrentHashMap<>();             // memoryId → runId
-    private final Map<String, String> runningTokens = new ConcurrentHashMap<>();             // memoryId → 锁 token
-    private final Map<String, String> runningRequestIds = new ConcurrentHashMap<>();         // memoryId → 客户端请求 ID
+    // ============ 状态存储：requestId 维度，支持同一会话多请求并存 ============
+    /** requestId -> emitter */
+    private final Map<String, AiChatSseEmitter> emittersByRequest = new ConcurrentHashMap<>();
+    /** requestId -> runId */
+    private final Map<String, String> runIdsByRequest = new ConcurrentHashMap<>();
+    /** requestId -> lock token */
+    private final Map<String, String> tokensByRequest = new ConcurrentHashMap<>();
+    /** requestId -> memoryId */
+    private final Map<String, String> memoryIdsByRequest = new ConcurrentHashMap<>();
+    /** memoryId -> 当前活跃的 requestId（用于会话级替换 / 查询） */
+    private final Map<String, String> activeRequestByMemory = new ConcurrentHashMap<>();
 
-    /**                                                                         // Javadoc
-     * 构造注入。                                                                 // 说明
-     */                                                                         // 结束
-    public AiAgentService(ChatHistoryStore history,                             // 构造器
+    public AiAgentService(ChatHistoryStore history,
                           RedisLockHelper redisLockHelper,
                           RedisUtils redisUtils,
                           AiChatExecutor chatExecutor,
                           AiAgentRunner runner) {
-        this.history = history;                                                 // 赋值
-        this.redisLockHelper = redisLockHelper;                                 // 赋值
-        this.redisUtils = redisUtils;                                           // 赋值
-        this.chatExecutor = chatExecutor;                                       // 赋值
-        this.runner = runner;                                                   // 赋值
+        this.history = history;
+        this.redisLockHelper = redisLockHelper;
+        this.redisUtils = redisUtils;
+        this.chatExecutor = chatExecutor;
+        this.runner = runner;
     }
 
-    /**                                                                         // Javadoc
-     * 对话入口：创建 SSE，注册状态，加锁，提交线程池。                             // 说明
-     */                                                                         // 结束
-    public SseEmitter chat(ChatRequest request, String userId) {                // 方法
-        Locale locale = LocaleContextHolder.getLocale();                        // 1. 取当前语言
-        String sessionId = request.sessionId();                                 // 2. 取 sessionId
-        String memoryId = userId + ":" + sessionId;                             // 3. 构造 memoryId（用户+会话唯一键）
-        String lockKey = "ai:chat:lock:" + memoryId;                            // 4. 构造锁 key
-        String token = UUID.randomUUID().toString();                            // 5. 生成本次锁 token
-        String newRunId = UUID.randomUUID().toString();                         // 6. 生成本次 runId
-        String requestId = (request.clientRequestId() != null && !request.clientRequestId().isBlank()) // 7. 客户端请求 ID
-                ? request.clientRequestId()                                     //    有则用
-                : UUID.randomUUID().toString();                                 //    无则生成
+    public SseEmitter chat(ChatRequest request, String userId) {
+        Locale locale = LocaleContextHolder.getLocale();
+        String sessionId = request.sessionId();
+        String memoryId = userId + ":" + sessionId;
+        String lockKey = "ai:chat:lock:" + memoryId;
+        String token = UUID.randomUUID().toString();
+        String newRunId = UUID.randomUUID().toString();
+        String requestId = (request.clientRequestId() != null && !request.clientRequestId().isBlank())
+                ? request.clientRequestId()
+                : UUID.randomUUID().toString();
 
-        AiChatSseEmitter emitter = new AiChatSseEmitter();                      // 8. 创建 SSE 发射器
+        AiChatSseEmitter emitter = new AiChatSseEmitter();
 
-        try {                                                                   // 9. 主流程
-            // 1. 清理旧状态（先取 token、forceUnlock，再关闭旧 emitter，避免 onCompletion 提前清 token） // 注释
-            String oldToken = runningTokens.remove(memoryId);                   // 9.1 取旧 token 并移除
-            if (oldToken != null) {                                             //    旧 token 存在
-                redisLockHelper.forceUnlock(lockKey);                           //    强制释放旧锁
-                log.info(">>> 强制释放旧 Redis 锁: lockKey={}, oldToken={}", lockKey, oldToken); // 日志
-            }
-
-            AiChatSseEmitter oldEmitter = runningEmitters.remove(memoryId);     // 9.2 取旧 emitter 并移除
-            if (oldEmitter != null && !oldEmitter.isClosed()) {                 //    旧 emitter 存在且未关闭
-                try {                                                           //    try
-                    oldEmitter.send("error", Map.of("message", "会话已被新请求替换")); //    发送替换通知
-                    oldEmitter.complete();                                      //    关闭
-                    log.info(">>> 已关闭旧 emitter: memoryId={}", memoryId);      //    日志
-                } catch (Exception e) {                                         //    异常
-                    log.warn("关闭旧 emitter 异常: memoryId={}", memoryId, e);    //    日志
+        try {
+            // ---- 1. 替换同一会话的旧请求（按 memoryId 找旧 requestId）----
+            String oldRequestId = activeRequestByMemory.get(memoryId);
+            if (oldRequestId != null && !oldRequestId.equals(requestId)) {
+                String oldToken = tokensByRequest.remove(oldRequestId);
+                if (oldToken != null) {
+                    redisLockHelper.forceUnlock(lockKey);
+                    log.info(">>> 强制释放旧 Redis 锁: lockKey={}, oldToken={}", lockKey, oldToken);
                 }
+                AiChatSseEmitter oldEmitter = emittersByRequest.remove(oldRequestId);
+                if (oldEmitter != null && !oldEmitter.isClosed()) {
+                    try {
+                        oldEmitter.send("error", Map.of("message", "会话已被新请求替换"));
+                        oldEmitter.complete();
+                    } catch (Exception e) {
+                        log.warn("关闭旧 emitter 异常: memoryId={}", memoryId, e);
+                    }
+                }
+                runIdsByRequest.remove(oldRequestId);
+                memoryIdsByRequest.remove(oldRequestId);
+                log.info(">>> 已替换旧请求: memoryId={}, oldRequestId={}, newRequestId={}",
+                        memoryId, oldRequestId, requestId);
             }
 
-            // 2. 注册当前请求状态                                             // 注释
-            runningEmitters.put(memoryId, emitter);                             // 9.3 注册 emitter
-            runningTokens.put(memoryId, token);                                 //    注册 token
-            runningRunIds.put(memoryId, newRunId);                              //    注册 runId
-            runningRequestIds.put(memoryId, requestId);                         //    注册 requestId
+            // ---- 2. 注册本次请求状态 ----
+            emittersByRequest.put(requestId, emitter);
+            runIdsByRequest.put(requestId, newRunId);
+            tokensByRequest.put(requestId, token);
+            memoryIdsByRequest.put(requestId, memoryId);
+            activeRequestByMemory.put(memoryId, requestId);
 
-            // 3. 获取锁                                                       // 注释
-            boolean locked = redisLockHelper.tryLock(lockKey, token, 5_000L);   // 9.4 尝试加锁（5s TTL）
-            if (!locked) {                                                      //    加锁失败
-                log.error(">>> 锁冲突，关闭新请求: memoryId={}, oldToken={}", memoryId, oldToken); // 日志
-                runningEmitters.remove(memoryId, emitter);                      //    清理状态
-                runningTokens.remove(memoryId, token);                          //    清理
-                runningRunIds.remove(memoryId, newRunId);                       //    清理
-                runningRequestIds.remove(memoryId, requestId);                  //    清理
-                try {                                                           //    try
-                    emitter.send(SseEmitter.event().name("error")               //    发送 error
-                            .data(Map.of("message", "上一次请求尚未完成，请稍后再试"))); //    消息
-                } catch (Exception ignored) {}                                  //    忽略
-                emitter.complete();                                             //    关闭
-                return emitter;                                                 //    返回
+            // ---- 3. 加锁 ----
+            boolean locked = redisLockHelper.tryLock(lockKey, token, 5_000L);
+            if (!locked) {
+                log.error(">>> 锁冲突，关闭新请求: memoryId={}", memoryId);
+                cleanup(requestId);
+                try {
+                    emitter.send(SseEmitter.event().name("error")
+                            .data(Map.of("message", "上一次请求尚未完成，请稍后再试")));
+                } catch (Exception ignored) {}
+                emitter.complete();
+                return emitter;
             }
-            log.info(">>> 成功获取锁: memoryId={}, requestId={}", memoryId, requestId); // 9.5 日志
+            log.info(">>> 成功获取锁: memoryId={}, requestId={}", memoryId, requestId);
 
-            // 4. 会话初始化                                                   // 注释
-            boolean newSession = !history.exists(sessionId);                    // 9.6 判断是否新会话
-            if (!newSession) history.assertOwner(sessionId, userId);            //    非新会话校验 owner
+            // ---- 4. 会话初始化 ----
+            boolean newSession = !history.exists(sessionId);
+            if (!newSession) history.assertOwner(sessionId, userId);
 
-            // ✅ 注意：AiToolContext.capture 需要 3 个参数（userId, roles, redisUtils） // 注释
-            // 如果你没有 RoleUtils 字段，请检查 AiToolContext 的签名                  // 注释
-            AiToolContext context = AiToolContext.capture(userId, redisUtils);  // 9.7 构造工具上下文
-            long userMessageId = history.nextMessageId();                       // 9.8 分配 user 消息 ID
-            long assistantMessageId = history.nextMessageId();                  //    分配 assistant 消息 ID
+            AiToolContext context = AiToolContext.capture(userId, redisUtils);
+            long userMessageId = history.nextMessageId();
+            long assistantMessageId = history.nextMessageId();
 
-            // 5. 注册生命周期回调                                              // 注释
-            emitter.onCompletion(() -> {                                        // 9.9 完成回调
-                runningEmitters.remove(memoryId, emitter);                      //    清理 emitter
-                runningRunIds.remove(memoryId, newRunId);                       //    清理 runId
-                runningTokens.remove(memoryId, token);                          //    清理 token
-                runningRequestIds.remove(memoryId, requestId);                  //    清理 requestId
+            // ---- 5. 生命周期回调 ----
+            emitter.onCompletion(() -> {
+                cleanup(requestId);
+                log.debug(">>> emitter onCompletion: requestId={}", requestId);
             });
-            emitter.onTimeout(() -> {                                           // 9.10 超时回调
-                try { emitter.complete(); } catch (Exception ignored) {}        //    关闭
-                runningRequestIds.remove(memoryId);                             //    清理 requestId
-                redisLockHelper.unlock(lockKey, token);                         //    释放锁
+            emitter.onTimeout(() -> {
+                try { emitter.complete(); } catch (Exception ignored) {}
+                cleanup(requestId);
+                redisLockHelper.unlock(lockKey, token);
+            });
+            emitter.onError(e -> {
+                cleanup(requestId);
+                log.warn(">>> emitter onError: requestId={}, err={}", requestId, e.toString());
             });
 
-            // 6. 提交任务                                                     // 注释
-            chatExecutor.execute(() -> runner.run(                              // 9.11 提交线程池
-                    request, context, userId, newSession, sessionId,            //    参数
-                    userMessageId, assistantMessageId, locale,                  //    参数
-                    memoryId, lockKey, token, emitter, newRunId));              //    参数
+            // ---- 6. 提交线程池 ----
+            chatExecutor.execute(() -> runner.run(
+                    request, context, userId, newSession, sessionId,
+                    userMessageId, assistantMessageId, locale,
+                    memoryId, lockKey, token, emitter, newRunId));
 
-            return emitter;                                                     // 9.12 返回 emitter
+            return emitter;
 
-        } catch (Exception e) {                                                 // 10. 入口异常
-            log.error("chat() 入口异常", e);                                     //    日志
-            try {                                                               //    try
-                emitter.send(SseEmitter.event().name("error")                   //    发送 error
-                        .data(Map.of("message", "系统繁忙，请稍后再试")));         //    消息
-            } catch (Exception ignored) {}                                      //    忽略
-            emitter.complete();                                                 //    关闭
-            return emitter;                                                     //    返回
+        } catch (Exception e) {
+            log.error("chat() 入口异常", e);
+            cleanup(requestId);
+            try {
+                emitter.send(SseEmitter.event().name("error")
+                        .data(Map.of("message", "系统繁忙，请稍后再试")));
+            } catch (Exception ignored) {}
+            emitter.complete();
+            return emitter;
         }
     }
 
-    /**                                                                         // Javadoc
-     * 停止指定会话。                                                             // 说明
-     */                                                                         // 结束
-    public void stop(String sessionId, String userId, String clientRequestId) { // 方法
-        if (sessionId == null || sessionId.isBlank() || userId == null) return; // 1. 参数校验
-        String memoryId = userId + ":" + sessionId;                             // 2. 构造 memoryId
-        log.info(">>> 停止会话: memoryId={}, clientRequestId={}", memoryId, clientRequestId); // 3. 日志
+    /**
+     * 停止指定 clientRequestId 的请求。
+     * 前端必须传当前这次 chat 的 clientRequestId（从 SSE meta 帧拿）。
+     */
+    public void stop(String sessionId, String userId, String clientRequestId) {
+        if (sessionId == null || sessionId.isBlank() || userId == null) return;
+        String memoryId = userId + ":" + sessionId;
+        log.info(">>> 停止会话: memoryId={}, clientRequestId={}", memoryId, clientRequestId);
 
-        String storedRequestId = runningRequestIds.get(memoryId);               // 4. 取存储的 requestId
-        if (clientRequestId != null && !clientRequestId.isBlank()) {            // 5. 若客户端传了 requestId
-            boolean requestIdMatches = clientRequestId.equals(storedRequestId); //    比对
-            if (!requestIdMatches) {                                            //    不匹配
-                log.info("stop() clientRequestId 不匹配，跳过关闭: stored={}, requested={}", // 日志
-                        storedRequestId, clientRequestId);
-                return;                                                         //    直接返回
-            }
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            log.warn("stop() clientRequestId 为空，忽略: memoryId={}", memoryId);
+            return;
         }
 
-        AiChatSseEmitter emitter = runningEmitters.remove(memoryId);            // 6. 取 emitter 并移除
-        if (emitter != null) {                                                  //    存在
-            try {                                                               //    try
-                if (!emitter.isClosed()) {                                      //    未关闭
-                    emitter.send("error", Map.of("message", "会话已被新的请求替换")); //    发送通知
-                    emitter.complete();                                         //    关闭
-                    log.info(">>> 已关闭 emitter: memoryId={}", memoryId);        //    日志
-                }
-            } catch (Exception e) {                                             //    异常
-                log.warn("关闭 emitter 异常: memoryId={}", memoryId, e);          //    日志
-            }
-        } else {                                                                //    不存在
-            log.info("stop() emitter 已不存在, memoryId={}", memoryId);          //    日志
-        }
-        runningRequestIds.remove(memoryId);                                     // 7. 清理 requestId
-
-        String token = runningTokens.remove(memoryId);                          // 8. 取 token 并移除
-        if (token != null) {                                                    //    存在
-            String lockKey = "ai:chat:lock:" + memoryId;                        //    构造锁 key
-            try {                                                               //    try
-                redisLockHelper.unlock(lockKey, token);                         //    释放锁
-                log.info("<<< 释放 Redis 锁: lockKey={}", lockKey);              //    日志
-            } catch (Exception e) {                                             //    异常
-                log.error("释放 Redis 锁失败: {}", lockKey, e);                   //    日志
-            }
+        AiChatSseEmitter emitter = emittersByRequest.remove(clientRequestId);
+        if (emitter == null) {
+            log.info("stop() 未找到 emitter，忽略: requestId={}, memoryId={}",
+                    clientRequestId, memoryId);
+            return;
         }
 
-        runningRunIds.remove(memoryId);                                         // 9. 清理 runId
+        try {
+            if (!emitter.isClosed()) {
+                emitter.send("error", Map.of("message", "会话已被手动停止"));
+                emitter.complete();
+                log.info(">>> 已关闭 emitter: requestId={}", clientRequestId);
+            }
+        } catch (Exception e) {
+            log.warn("关闭 emitter 异常: requestId={}", clientRequestId, e);
+        }
+
+        // 释放锁 + 清理
+        String token = tokensByRequest.remove(clientRequestId);
+        if (token != null) {
+            String lockKey = "ai:chat:lock:" + memoryId;
+            try {
+                redisLockHelper.unlock(lockKey, token);
+                log.info("<<< 释放 Redis 锁: lockKey={}", lockKey);
+            } catch (Exception e) {
+                log.error("释放 Redis 锁失败: {}", lockKey, e);
+            }
+        }
+        runIdsByRequest.remove(clientRequestId);
+        memoryIdsByRequest.remove(clientRequestId);
+        activeRequestByMemory.remove(memoryId, clientRequestId);
+    }
+
+    /** 清理单个 requestId 的状态 */
+    private void cleanup(String requestId) {
+        emittersByRequest.remove(requestId);
+        runIdsByRequest.remove(requestId);
+        tokensByRequest.remove(requestId);
+        String memoryId = memoryIdsByRequest.remove(requestId);
+        if (memoryId != null) {
+            activeRequestByMemory.remove(memoryId, requestId);
+        }
     }
 }
