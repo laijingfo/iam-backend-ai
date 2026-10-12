@@ -4,6 +4,51 @@ server:
     context-path: /itsc
   tomcat:
     connection-timeout: 300000
+mail:
+  send-enabled: ${MAIL_SEND_ENABLED:false}
+  from-address: ${MAIL_FROM:uar@lenovo.com}
+  from-alias: ${MAIL_FROM_NAME:Dev - User Access Review}
+  username: ${MAIL_USERNAME:uar@lenovo.com}
+  password: ${MAIL_PASSWORD:0}
+
+spring:
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:5432/ITSC_Test?stringtype=unspecified&serverTimezone=Asia/Shanghai
+    username: postgres
+    password: 123456
+    driver-class-name: org.postgresql.Driver
+    type: com.alibaba.druid.pool.DruidDataSource
+
+  data.redis:
+    host: 127.0.0.1
+    port: 6379
+    database: ${REDIS_DATABASE:1}
+    timeout: 3000
+    password:
+    lettuce:
+      pool:
+        max-active: 50  # 必须增大连接池
+        max-idle: 16
+        min-idle: 1
+        max-wait: -1ms
+
+  servlet:
+    multipart:
+      #上传的单个文件的最大大小，默认为 1MB
+      max-file-size: 200MB
+      #多文件上传时文件的总大小，默认为 10MB
+      max-request-size: 200MB
+
+mybatis-plus:
+  config-location: classpath:mybatis-config.xml
+  mapper-locations: classpath:mapper/*.xml
+
+splunk:
+  address: https://itsi.lenovo.com:8089
+  authorization: eyJraWQiOiJzcGx1bmsuc2VjcmV0IiwiYWxnIjoiSFM1MTIiLCJ2ZXIiOiJ2MiIsInR0eXAiOiJzdGF0aWMifQ.eyJpc3MiOiJzaGFuZ25hbjFAbGVub3ZvLmNvbSBmcm9tIHNsdHZvazlybXZxLm5vdmFsb2NhbCIsInN1YiI6InN5c19jeWJlcnRyb25fYWlvcHMiLCJhdWQiOiJDeWJlcnRyb24gQUlPcHMgQXBpIENhbGwiLCJpZHAiOiJTcGx1bmsiLCJqdGkiOiJhMjM2ZmQzZDMyOTg4MTFlMTY3MWYyOWVlMzBhZDUwM2Q4Y2FkYjZlYTI0M2IxNWYxZjI1NDZhYjk3YjRiNjg5IiwiaWF0IjoxNjY0MjYxNzE3LCJleHAiOjMyNTAzNjUxMTQwLCJuYnIiOjE2NjQyNjE3MTd9.ntQL1D7JR1VBJXgs1odgbhUJLKmVzl46m0gLxuEXdMzDBK2rstyKaOILRoFIKsrShobHgPyfmCm_l5su-IvQKw
+  opex_token: eyJraWQiOiJzcGx1bmsuc2VjcmV0IiwiYWxnIjoiSFM1MTIiLCJ2ZXIiOiJ2MiIsInR0eXAiOiJzdGF0aWMifQ.eyJpc3MiOiJkb3VyczFAbGVub3ZvLmNvbSBmcm9tIHNscGU5dnJzaWR2Iiwic3ViIjoic3lzX2l0c2NfYmFja2VuZCIsImF1ZCI6IlRva2VuIGZvciBJVFNDIGRhdGEgdHJhbnNmZXIiLCJpZHAiOiJTcGx1bmsiLCJqdGkiOiIxOTkyZmFkMmY2OGRhNzU3MDcyOWM3M2Q5OTE4MTRmYzhjMzlhNjRlZTUwMTIzNDA1NWMyZTI2Yzc5ODRjMDU3IiwiaWF0IjoxNjkwNjI4OTE2LCJleHAiOjQwODkwMjM5NDAsIm5iciI6MTY5MDYyODkxNn0.xWJa3WUT4zOyucReszy6KUi5Gdqt_qBLUbjnMFmR1slysYCWNocIj5brYntI02FsFobrzXerNR4s1ibO6PZNcA
+
+#ApiHub
 
 
 langchain4j:
@@ -11,32 +56,33 @@ langchain4j:
     # LangChain4jConfig 的 @Value 读取（starter 自身配置在各模型块下）
     base-url: https://ws-h0yse1g5h37z1f9s.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
     api-key: sk-ws-H.PIYYERR.1Nwn.MEUCIElKdWigzoNh0Q0oyc4diloh1kPaG985KNHutJFYZ_BcAiEAxSEiKGkUToaPuDQXxyTjjvFHlw-ijplt7phf64Nt6EM
-#    base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-#    api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
+    #    base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    #    api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
     #非流式对话模型
     chat-model:
-      model-name: qwen3-max
-#      bean-name: openAiChatModel
-#      log-requests: true                   # 建议开启，方便调试
-#      log-responses: true
-#      temperature: 0.7
-#      timeout: PT60S
+      model-name: kimi-k2.6
+    #      bean-name: openAiChatModel
+    #      log-requests: true                   # 建议开启，方便调试
+    #      log-responses: true
+    #      temperature: 0.7
+    #      timeout: PT60S
     #文本转向量模型
     embedding-model:
-#      api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
+      #      api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
       model-name: text-embedding-v3
-#      base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-#      bean-name: openAiEmbeddingModel
-#      log-requests: true
-#      log-responses: true
-#      timeout: PT60S
+      dimension: 1024
+    #      base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    #      bean-name: openAiEmbeddingModel
+    #      log-requests: true
+    #      log-responses: true
+    #      timeout: PT60S
     # 流式对话模型
     streaming-chat-model: # ← 新增
       base-url: https://ws-h0yse1g5h37z1f9s.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
       api-key: sk-ws-H.PIYYERR.1Nwn.MEUCIElKdWigzoNh0Q0oyc4diloh1kPaG985KNHutJFYZ_BcAiEAxSEiKGkUToaPuDQXxyTjjvFHlw-ijplt7phf64Nt6EM
-#      base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-#      api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
-      model-name: qwen3-max
+      #      base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      #      api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
+      model-name: kimi-k2.6
       temperature: 0.7
       timeout: PT60S
       log-requests: true
@@ -65,6 +111,19 @@ ai:
     refresh-minutes: 10
     retry-backoff-millis: 60000
 
-#      sk-ws-H.PIYYERR.1Nwn.MEUCIElKdWigzoNh0Q0oyc4diloh1kPaG985KNHutJFYZ_BcAiEAxSEiKGkUToaPuDQXxyTjjvFHlw-ijplt7phf64Nt6EM
-#       https://ws-h0yse1g5h37z1f9s.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-#sk-ws-H.PLIRYDH.IcJU.MEYCIQDN0zi5reJjuS9UW70y-7XUoPSxqOHvWbHcoeYj8BMr3QIhALlkqh28e-ogf5XW8pngON7yZLVZLUzq_PtcAz3jLOV-
+token:
+  enabled: true
+  default-tier: FREE
+  max-prompt-tokens: 6000
+  context-reserve-ratio: 0.2   # 预留 20% 给输出
+  cost:
+    # ¥ / 千 token
+    kimi-k2.6: { input: 0.012, output: 0.012 }
+    qwen-turbo: { input: 0.0003, output: 0.0006 }
+    qwen-max: { input: 0.02, output: 0.06 }
+    text-embedding-v3: { input: 0.0007, output: 0.0 }
+  quota:
+    FREE:    { daily: 500000,   monthly: 5000000,   maxRequest: 8000 }
+    BASIC:   { daily: 2000000,  monthly: 20000000,  maxRequest: 12000 }
+    PREMIUM: { daily: 10000000, monthly: 100000000, maxRequest: 20000 }
+    VIP:     { daily: -1,       monthly: -1,        maxRequest: 32000 }
