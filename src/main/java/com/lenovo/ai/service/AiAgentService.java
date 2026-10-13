@@ -6,6 +6,8 @@ import com.lenovo.ai.agent.runtime.AiChatExecutor;
 import com.lenovo.ai.infra.history.ChatHistoryStore;
 import com.lenovo.ai.infra.lock.RedisLockHelper;
 import com.lenovo.ai.infra.sse.AiChatSseEmitter;
+import com.lenovo.ai.token.QuotaExceededException;
+import com.lenovo.ai.token.TokenQuotaService;
 import com.lenovo.ai.tools.context.AiToolContext;
 import com.lenovo.util.RedisUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -27,32 +29,48 @@ public class AiAgentService {
     private final RedisUtils redisUtils;
     private final AiChatExecutor chatExecutor;
     private final AiAgentRunner runner;
+    private final TokenQuotaService quotaService;          // ★ 新增
 
-    // ============ 状态存储：requestId 维度，支持同一会话多请求并存 ============
-    /** requestId -> emitter */
+    // ============ 状态存储：requestId 维度 ============
     private final Map<String, AiChatSseEmitter> emittersByRequest = new ConcurrentHashMap<>();
-    /** requestId -> runId */
     private final Map<String, String> runIdsByRequest = new ConcurrentHashMap<>();
-    /** requestId -> lock token */
     private final Map<String, String> tokensByRequest = new ConcurrentHashMap<>();
-    /** requestId -> memoryId */
     private final Map<String, String> memoryIdsByRequest = new ConcurrentHashMap<>();
-    /** memoryId -> 当前活跃的 requestId（用于会话级替换 / 查询） */
     private final Map<String, String> activeRequestByMemory = new ConcurrentHashMap<>();
 
     public AiAgentService(ChatHistoryStore history,
                           RedisLockHelper redisLockHelper,
                           RedisUtils redisUtils,
                           AiChatExecutor chatExecutor,
-                          AiAgentRunner runner) {
+                          AiAgentRunner runner,
+                          TokenQuotaService quotaService) {        // ★ 新增参数
         this.history = history;
         this.redisLockHelper = redisLockHelper;
         this.redisUtils = redisUtils;
         this.chatExecutor = chatExecutor;
         this.runner = runner;
+        this.quotaService = quotaService;
     }
 
     public SseEmitter chat(ChatRequest request, String userId) {
+
+        // ============================================================
+        // ★★★ 改动 1：入口配额检查 ★★★
+        // ============================================================
+        try {
+            quotaService.checkOrThrow(userId);
+        } catch (QuotaExceededException e) {
+            log.warn("[quota] 用户 {} 配额超限，拒绝请求: {}", userId, e.getReason());
+            AiChatSseEmitter reject = new AiChatSseEmitter();
+            try {
+                reject.send("error", Map.of(
+                        "code", "QUOTA_EXCEEDED",
+                        "message", e.getReason()));
+            } catch (Exception ignored) {}
+            reject.complete();
+            return reject;
+        }
+
         Locale locale = LocaleContextHolder.getLocale();
         String sessionId = request.sessionId();
         String memoryId = userId + ":" + sessionId;
@@ -66,7 +84,7 @@ public class AiAgentService {
         AiChatSseEmitter emitter = new AiChatSseEmitter();
 
         try {
-            // ---- 1. 替换同一会话的旧请求（按 memoryId 找旧 requestId）----
+            // ---- 1. 替换同一会话的旧请求 ----
             String oldRequestId = activeRequestByMemory.get(memoryId);
             if (oldRequestId != null && !oldRequestId.equals(requestId)) {
                 String oldToken = tokensByRequest.remove(oldRequestId);
@@ -133,11 +151,11 @@ public class AiAgentService {
                 log.warn(">>> emitter onError: requestId={}, err={}", requestId, e.toString());
             });
 
-            // ---- 6. 提交线程池 ----
+            // ---- 6. 提交线程池（注意：run 的最后参数是 requestId，不是 newRunId）----
             chatExecutor.execute(() -> runner.run(
                     request, context, userId, newSession, sessionId,
                     userMessageId, assistantMessageId, locale,
-                    memoryId, lockKey, token, emitter, newRunId));
+                    memoryId, lockKey, token, emitter, requestId));
 
             return emitter;
 
@@ -153,10 +171,6 @@ public class AiAgentService {
         }
     }
 
-    /**
-     * 停止指定 clientRequestId 的请求。
-     * 前端必须传当前这次 chat 的 clientRequestId（从 SSE meta 帧拿）。
-     */
     public void stop(String sessionId, String userId, String clientRequestId) {
         if (sessionId == null || sessionId.isBlank() || userId == null) return;
         String memoryId = userId + ":" + sessionId;
@@ -184,7 +198,6 @@ public class AiAgentService {
             log.warn("关闭 emitter 异常: requestId={}", clientRequestId, e);
         }
 
-        // 释放锁 + 清理
         String token = tokensByRequest.remove(clientRequestId);
         if (token != null) {
             String lockKey = "ai:chat:lock:" + memoryId;
@@ -200,7 +213,6 @@ public class AiAgentService {
         activeRequestByMemory.remove(memoryId, clientRequestId);
     }
 
-    /** 清理单个 requestId 的状态 */
     private void cleanup(String requestId) {
         emittersByRequest.remove(requestId);
         runIdsByRequest.remove(requestId);

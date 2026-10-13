@@ -11,9 +11,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 一次 Agent 运行（run）的上下文。
- */
 public class AgentContext {
 
     private final List<Message> messages;
@@ -25,12 +22,15 @@ public class AgentContext {
     private final String memoryId;
     private final Set<String> confirmedCalls = ConcurrentHashMap.newKeySet();
 
-    // ===== 新增字段 =====
+    // ===== 原有字段 =====
     private String agentName;
     private List<String> allowedToolNames;
     private int maxSteps = 8;
     private Blackboard blackboard;
     private boolean streamToUser = true;
+
+    // ★ 新增：模型名（由 AiAgentRunner 路由后写入）
+    private String modelName;
 
     public AgentContext(List<Message> messages, AiToolContext toolContext,
                         AiChatSseEmitter emitter, String sessionId,
@@ -56,7 +56,6 @@ public class AgentContext {
     public void markConfirmed(String callId) { confirmedCalls.add(callId); }
     public List<String> confirmedCallsSnapshot() { return new ArrayList<>(confirmedCalls); }
 
-    // ===== 新增 getter/setter =====
     public String agentName() { return agentName; }
     public void setAgentName(String agentName) { this.agentName = agentName; }
 
@@ -74,12 +73,10 @@ public class AgentContext {
     public boolean streamToUser() { return streamToUser; }
     public void setStreamToUser(boolean streamToUser) { this.streamToUser = streamToUser; }
 
-    /**
-     * 派生一个子上下文，用于子任务：
-     * - 复制 runId/sessionId/assistantMessageId/blackboard/streamToUser
-     * - messages 重置为只含一条 user 指令
-     * - 继承工具上下文和 SSE（同一个 emitter）
-     */
+    // ★ 新增
+    public String getModelName() { return modelName; }
+    public void setModelName(String modelName) { this.modelName = modelName; }
+
     public AgentContext fork(String instruction) {
         List<Message> sub = new ArrayList<>();
         sub.add(Message.user(instruction));
@@ -87,10 +84,10 @@ public class AgentContext {
                 this.sessionId, this.assistantMessageId, this.runId, this.memoryId);
         child.setBlackboard(this.blackboard);
         child.setStreamToUser(this.streamToUser);
+        child.setModelName(this.modelName);       // ★ 继承模型
         return child;
     }
 
-    /** 取最后一条 assistant 文本，用于 Orchestrator 汇总 */
     public String lastAssistantContent() {
         for (int i = messages.size() - 1; i >= 0; i--) {
             Message m = messages.get(i);
