@@ -363,6 +363,17 @@
             <artifactId>langchain4j-http-client-jdk</artifactId>
             <version>1.19.0</version>
         </dependency>
+        <!-- Spring Boot Actuator：暴露 /actuator 端点 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Micrometer Prometheus 注册表：把指标以 Prometheus 格式暴露 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
     </dependencies>
 
     <repositories>
