@@ -1,31 +1,25 @@
-package com.lenovo.ai.token;
+package com.lenovo.ai.token.quota;
 
+import com.lenovo.ai.token.config.TokenProperties;
+import com.lenovo.ai.token.constant.TokenRedisKeys;
+import com.lenovo.ai.token.exception.QuotaExceededException;
+import com.lenovo.ai.token.model.QuotaStatus;
+import com.lenovo.ai.token.model.TokenQuota;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.Map;
 
-/**
- * @author laifo
- * @version 1.0
- * @date 2026-10-12 17:20
- * @project iam-backend-ai
- * @description
- * 配额管理
- * 职责: 检查配额、扣减、按用户等级控制
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class TokenQuotaService {
 
-    private static final DateTimeFormatter MONTH_FMT = DateTimeFormatter.ofPattern("yyyyMM");
-
     private final StringRedisTemplate redis;
+    private final QuotaResolver quotaResolver;
+    private final TokenProperties properties;
 
     /** 查询配额状态 */
     public QuotaStatus check(String userId) {
@@ -36,19 +30,16 @@ public class TokenQuotaService {
         }
 
         // 日用量
-        String dayKey = TokenCounter.dayKey(userId);
+        String dayKey = TokenRedisKeys.usageDay(userId);
         Map<Object, Object> dayUsage = redis.opsForHash().entries(dayKey);
         long dUsed = parseLong(dayUsage.get("totalTokens"));
-        String dayCostStr = redis.opsForValue().get(TokenCounter.costDayKey(userId));
-        double dayCost = dayCostStr == null ? 0 : Double.parseDouble(dayCostStr);
+        double dayCost = readCostMicro(TokenRedisKeys.costDay(userId));
 
         // 月用量
-        String monthKey = "ai:token:usage:" + userId + ":" + LocalDate.now().format(MONTH_FMT);
+        String monthKey = TokenRedisKeys.usageMonth(userId);
         Map<Object, Object> monthUsage = redis.opsForHash().entries(monthKey);
         long mUsed = parseLong(monthUsage.get("totalTokens"));
-        String monthCostStr = redis.opsForValue().get(
-                "ai:token:cost:" + userId + ":" + LocalDate.now().format(MONTH_FMT));
-        double monthCost = monthCostStr == null ? 0 : Double.parseDouble(monthCostStr);
+        double monthCost = readCostMicro(TokenRedisKeys.costMonth(userId));
 
         boolean exceeded = false;
         String reason = null;
@@ -81,9 +72,15 @@ public class TokenQuotaService {
     }
 
     public TokenQuota loadQuota(String userId) {
-        String key = "ai:token:quota:" + userId;
+        String key = TokenRedisKeys.quota(userId);
         Map<Object, Object> m = redis.opsForHash().entries(key);
-        if (m == null || m.isEmpty()) return TokenQuota.defaultFree(userId);
+
+        // ★ 关键：key 不存在 OR 字段缺失时，都走默认
+        if (m == null || m.isEmpty() || !m.containsKey("monthlyLimit")) {
+            log.info("[quota] 用户 {} 无有效配额，走默认 tier={}", userId, properties.getDefaultTier());
+            return quotaResolver.byTier(userId, properties.getDefaultTier());
+        }
+
         try {
             String tier = str(m.get("tier"));
             long dailyLimit = parseLong(m.get("dailyLimit"));
@@ -93,18 +90,29 @@ public class TokenQuotaService {
             return new TokenQuota(userId, tier, dailyLimit, monthlyLimit, maxReq, enabled);
         } catch (Exception e) {
             log.warn("[quota] 解析失败, 用默认: userId={}", userId, e);
-            return TokenQuota.defaultFree(userId);
+            return quotaResolver.byTier(userId, properties.getDefaultTier());
         }
     }
 
     public void setQuota(TokenQuota quota) {
-        String key = "ai:token:quota:" + quota.userId();
+        String key = TokenRedisKeys.quota(quota.userId());
         redis.opsForHash().put(key, "tier", quota.tier());
         redis.opsForHash().put(key, "dailyLimit", String.valueOf(quota.dailyTokenLimit()));
         redis.opsForHash().put(key, "monthlyLimit", String.valueOf(quota.monthlyTokenLimit()));
         redis.opsForHash().put(key, "maxRequest", String.valueOf(quota.maxRequestTokens()));
         redis.opsForHash().put(key, "enabled", quota.enabled() ? "1" : "0");
         log.info("[quota] 设置: userId={}, tier={}", quota.userId(), quota.tier());
+    }
+
+    /** 从 hash 读成本（微元 -> 元） */
+    private double readCostMicro(String key) {
+        Object v = redis.opsForHash().get(key, TokenRedisKeys.FIELD_COST);
+        if (v == null) return 0.0;
+        try {
+            return Long.parseLong(String.valueOf(v)) / (double) TokenRedisKeys.MICRO_CNY;
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
     }
 
     private static long parseLong(Object v) {

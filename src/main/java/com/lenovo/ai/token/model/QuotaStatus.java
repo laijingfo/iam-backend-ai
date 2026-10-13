@@ -1,4 +1,4 @@
-package com.lenovo.ai.token;
+package com.lenovo.ai.token.model;
 
 /**
  * @author laifo
@@ -6,6 +6,7 @@ package com.lenovo.ai.token;
  * @date 2026-10-12 17:15
  * @project iam-backend-ai
  * @description
+ * 用户 token 配额状态快照
  */
 public record QuotaStatus(
         String userId,
@@ -21,7 +22,16 @@ public record QuotaStatus(
         boolean exceeded,
         String reason
 ) {
+
+    /**
+     * 构造一个"已超限"的状态，用于账户禁用 / 无法读取配额等场景
+     */
     public static QuotaStatus exceeded(String userId, String tier, String reason) {
-        return new QuotaStatus(userId, tier, 0, 0, 0, 0, 0, 0, 0, 0, true, reason);
+        return new QuotaStatus(
+                userId, tier,
+                0, 0, 0,
+                0, 0, 0,
+                0, 0,
+                true, reason);
     }
 }

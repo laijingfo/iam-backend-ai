@@ -64,15 +64,22 @@ token:
   enabled: true
   default-tier: FREE
   max-prompt-tokens: 6000
-  context-reserve-ratio: 0.2   # 预留 20% 给输出
+  context-reserve-ratio: 0.2
+
+  # 估算器选择：heuristic（默认，零依赖）| tiktoken（精确，需 jtokkit）
+  estimator:
+    type: heuristic
+    # type: tiktoken      # 取消注释即启用精确估算
+
   cost:
-    # ¥ / 千 token
-    kimi-k2.6: { input: 0.012, output: 0.012 }
-    qwen-turbo: { input: 0.0003, output: 0.0006 }
-    qwen-max: { input: 0.02, output: 0.06 }
+    kimi-k2.6:         { input: 0.012,  output: 0.012 }
+    qwen-turbo:        { input: 0.0003, output: 0.0006 }
+    qwen-plus:         { input: 0.0008, output: 0.002 }
+    qwen-max:          { input: 0.02,   output: 0.06 }
     text-embedding-v3: { input: 0.0007, output: 0.0 }
+
   quota:
-    FREE:    { daily: 500000,   monthly: 5000000,   maxRequest: 8000 }
-    BASIC:   { daily: 2000000,  monthly: 20000000,  maxRequest: 12000 }
-    PREMIUM: { daily: 10000000, monthly: 100000000, maxRequest: 20000 }
-    VIP:     { daily: -1,       monthly: -1,        maxRequest: 32000 }
+    FREE:    { daily: 500000,   monthly: 5000000,   max-request: 8000 }
+    BASIC:   { daily: 2000000,  monthly: 20000000,  max-request: 12000 }
+    PREMIUM: { daily: 10000000, monthly: 100000000, max-request: 20000 }
+    VIP:     { daily: -1,       monthly: -1,        max-request: 32000 }

@@ -1,4 +1,4 @@
-package com.lenovo.ai.token;
+package com.lenovo.ai.token.model;
 
 import com.lenovo.ai.llm.LlmResponse;
 
@@ -16,6 +16,7 @@ public record TokenUsage(
         int totalTokens,
         int cachedTokens
 ) {
+
     public static TokenUsage zero() {
         return new TokenUsage(0, 0, 0, 0);
     }
@@ -42,7 +43,7 @@ public record TokenUsage(
     }
 
     public static TokenUsage fromLlmResponse(LlmResponse resp) {
-        if (resp == null) return TokenUsage.zero();
+        if (resp == null) return zero();
         return new TokenUsage(
                 resp.inputTokens(),
                 resp.outputTokens(),

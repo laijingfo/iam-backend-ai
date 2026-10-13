@@ -1,13 +1,6 @@
-package com.lenovo.ai.token;
+package com.lenovo.ai.token.exception;
 
-/**
- * @author laifo
- * @version 1.0
- * @date 2026-10-12 17:18
- * @project iam-backend-ai
- * @description
- */
-public class QuotaExceededException extends RuntimeException {
+public class QuotaExceededException extends TokenException {
     private final String userId;
     private final String reason;
 

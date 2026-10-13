@@ -16,7 +16,7 @@ import com.lenovo.ai.memory.ContextBuilder;
 import com.lenovo.ai.memory.MemoryExtractor;
 import com.lenovo.ai.memory.MemoryItem;
 import com.lenovo.ai.memory.UserMemoryStore;
-import com.lenovo.ai.token.ContextTrimmer;
+import com.lenovo.ai.token.context.ContextTrimmer;
 import com.lenovo.ai.tools.context.AiToolContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,7 +44,7 @@ public class AiAgentRunner {
     private final BlackboardFactory blackboardFactory;
     private final Orchestrator orchestrator;
 
-    // ★ 新增
+    // ★ 上下文裁剪 + 模型路由
     private final ContextTrimmer contextTrimmer;
     private final ModelRouter modelRouter;
 
@@ -151,7 +151,9 @@ public class AiAgentRunner {
     }
 
     // ================================================================
-    // ★ 新增：上下文裁剪
+    // ★ 上下文裁剪
+    // 说明：传入 0 表示"使用 TokenProperties.maxPromptTokens 配置值"
+    //      由 ContextTrimmer 内部兜底，避免调用方硬编码默认 token 数
     // ================================================================
     private List<Message> trimContext(List<Message> rawMessages) {
         if (rawMessages == null || rawMessages.isEmpty()) {
@@ -160,16 +162,16 @@ public class AiAgentRunner {
         try {
             // 拆分 system / 非 system
             List<Message> systems = rawMessages.stream()
-                    .filter(m -> "system".equalsIgnoreCase(String.valueOf(m.role())))
+                    .filter(this::isSystem)
                     .toList();
             List<Message> others = rawMessages.stream()
-                    .filter(m -> !"system".equalsIgnoreCase(String.valueOf(m.role())))
+                    .filter(m -> !isSystem(m))
                     .collect(Collectors.toList());
 
             // 找最后一条 user 作为本轮（从末尾向前找）
             Message current = null;
             for (int i = others.size() - 1; i >= 0; i--) {
-                if ("user".equalsIgnoreCase(String.valueOf(others.get(i).role()))) {
+                if (isUser(others.get(i))) {
                     current = others.remove(i);
                     break;
                 }
@@ -179,11 +181,30 @@ public class AiAgentRunner {
                 return rawMessages;
             }
 
-            return contextTrimmer.trim(systems, others, current,
-                    ContextTrimmer.DEFAULT_MAX_TOKENS);
+            // ★ 传 0：由 ContextTrimmer 内部读 TokenProperties.maxPromptTokens 兜底
+            return contextTrimmer.trim(systems, others, current, 0);
         } catch (Exception e) {
             log.warn("[context-trim] 裁剪失败，使用原始上下文", e);
             return rawMessages;
         }
+    }
+
+    // ================================================================
+    // ★ 角色判断辅助方法
+    // 适配 Message.role() 的两种可能定义：
+    //   - 返回枚举 Role：用 m.role().name()
+    //   - 返回 String   ：用 m.role()
+    // 下面按"枚举"写法给出，若编译失败请切换到注释里的 String 写法
+    // ================================================================
+    private boolean isSystem(Message m) {
+        return m.role() != null && "system".equalsIgnoreCase(m.role().name());
+        // 如果 Message.role() 返回 String：
+        // return "system".equalsIgnoreCase(m.role());
+    }
+
+    private boolean isUser(Message m) {
+        return m.role() != null && "user".equalsIgnoreCase(m.role().name());
+        // 如果 Message.role() 返回 String：
+        // return "user".equalsIgnoreCase(m.role());
     }
 }

@@ -477,6 +477,7 @@ public class QuotaExceededException extends RuntimeException {
 ```java
 package com.lenovo.ai.token;
 
+import com.lenovo.ai.token.model.TokenUsage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -496,10 +497,10 @@ public class CostCalculator {
      * output = 输出价格
      */
     private static final Map<String, ModelPrice> PRICES = Map.of(
-            "kimi-k2.6",         new ModelPrice(0.012, 0.012),
-            "qwen-turbo",        new ModelPrice(0.0003, 0.0006),
-            "qwen-plus",         new ModelPrice(0.0008, 0.002),
-            "qwen-max",          new ModelPrice(0.02, 0.06),
+            "kimi-k2.6", new ModelPrice(0.012, 0.012),
+            "qwen-turbo", new ModelPrice(0.0003, 0.0006),
+            "qwen-plus", new ModelPrice(0.0008, 0.002),
+            "qwen-max", new ModelPrice(0.02, 0.06),
             "text-embedding-v3", new ModelPrice(0.0007, 0.0)
     );
 
@@ -515,7 +516,7 @@ public class CostCalculator {
         int cachedInput = usage.cachedTokens();
 
         double inputCost = (normalInput / 1000.0) * price.input()
-                         + (cachedInput / 1000.0) * price.input() * 0.1;
+                + (cachedInput / 1000.0) * price.input() * 0.1;
         double outputCost = (usage.outputTokens() / 1000.0) * price.output();
         double total = inputCost + outputCost;
 
@@ -571,6 +572,8 @@ public class TokenEstimator {
 package com.lenovo.ai.token;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lenovo.ai.token.model.TokenUsage;
+import com.lenovo.ai.token.model.TokenUsageRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -676,12 +679,15 @@ public class TokenCounter {
     public static String dayKey(String userId) {
         return "ai:token:usage:" + userId + ":" + LocalDate.now().format(DAY_FMT);
     }
+
     public static String monthKey(String userId) {
         return "ai:token:usage:" + userId + ":" + LocalDate.now().format(MONTH_FMT);
     }
+
     public static String costDayKey(String userId) {
         return "ai:token:cost:" + userId + ":" + LocalDate.now().format(DAY_FMT);
     }
+
     public static String costMonthKey(String userId) {
         return "ai:token:cost:" + userId + ":" + LocalDate.now().format(MONTH_FMT);
     }
@@ -693,6 +699,9 @@ public class TokenCounter {
 ```java
 package com.lenovo.ai.token;
 
+import com.lenovo.ai.token.exception.QuotaExceededException;
+import com.lenovo.ai.token.model.QuotaStatus;
+import com.lenovo.ai.token.model.TokenQuota;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -823,8 +832,11 @@ public class TokenQuotaService {
     // ================ helpers ================
     private static long parseLong(Object v) {
         if (v == null) return 0;
-        try { return Long.parseLong(String.valueOf(v)); }
-        catch (Exception e) { return 0; }
+        try {
+            return Long.parseLong(String.valueOf(v));
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     private static String str(Object v) {
@@ -840,6 +852,9 @@ public class TokenQuotaService {
 ```java
 package com.lenovo.ai.token;
 
+import com.lenovo.ai.token.exception.QuotaExceededException;
+import com.lenovo.ai.token.model.QuotaStatus;
+import com.lenovo.ai.token.model.TokenQuota;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -940,9 +955,16 @@ public class TokenQuotaService {
 
     private static long parseLong(Object v) {
         if (v == null) return 0;
-        try { return Long.parseLong(String.valueOf(v)); } catch (Exception e) { return 0; }
+        try {
+            return Long.parseLong(String.valueOf(v));
+        } catch (Exception e) {
+            return 0;
+        }
     }
-    private static String str(Object v) { return v == null ? "" : String.valueOf(v); }
+
+    private static String str(Object v) {
+        return v == null ? "" : String.valueOf(v);
+    }
 }
 ```
 
@@ -1093,9 +1115,9 @@ public class ModelRouter {
 ```java
 package com.lenovo.controller.ai;
 
-import com.lenovo.ai.token.QuotaStatus;
-import com.lenovo.ai.token.TokenQuotaService;
-import com.lenovo.ai.token.TokenUsageRecord;
+import com.lenovo.ai.token.model.QuotaStatus;
+import com.lenovo.ai.token.quota.TokenQuotaService;
+import com.lenovo.ai.token.model.TokenUsageRecord;
 import com.lenovo.response.ApiResponse;
 import com.lenovo.security.utils.SecurityUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -1147,6 +1169,7 @@ public class TokenController {
 package com.lenovo.ai.token;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lenovo.ai.token.model.TokenUsageRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -1209,12 +1232,17 @@ public class TokenQueryService {
 
     private static long parseLong(Object v) {
         if (v == null) return 0;
-        try { return Long.parseLong(String.valueOf(v)); } catch (Exception e) { return 0; }
+        try {
+            return Long.parseLong(String.valueOf(v));
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     public record TokenUsageSummary(
             long inputTokens, long outputTokens, long totalTokens, long cachedTokens,
-            long requestCount, double costCny, java.util.Map<String, Long> byModel) {}
+            long requestCount, double costCny, java.util.Map<String, Long> byModel) {
+    }
 }
 ```
 

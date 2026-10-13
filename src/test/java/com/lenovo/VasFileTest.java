@@ -3,6 +3,7 @@ package com.lenovo;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.lenovo.ai.token.estimator.TokenEstimator;
 import com.lenovo.bean.apihub.ApiHubTokenBean;
 import com.lenovo.bean.knowledge.KnowledgeBase;
 import com.lenovo.bean.knowledge.KnowledgeRelation;
@@ -31,6 +32,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+// 缺这行
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @RunWith(SpringRunner.class)
@@ -66,6 +69,17 @@ public class VasFileTest {
     private ItsApplicationAccessDataService splunkDataSourceService;
     @Autowired
     private ApiHubUtils apiHubUtils;
+
+    @Autowired
+    private TokenEstimator estimator;
+
+    @Test
+    public void testEstimate() {
+        String text = "你好，世界！Hello, world! 12345";
+        int tokens = estimator.estimate(text);
+        System.out.println("估算 token: " + tokens);
+        assertTrue(tokens > 0);
+    }
 
     @Test
     public void syncNaData() {

@@ -1,4 +1,6 @@
-package com.lenovo.ai.token;
+package com.lenovo.ai.token.model;
+
+import lombok.Builder;
 
 /**
  * @author laifo
@@ -6,9 +8,8 @@ package com.lenovo.ai.token;
  * @date 2026-10-12 17:14
  * @project iam-backend-ai
  * @description
+ * 单次 LLM 调用的 token 用量明细记录
  */
-import lombok.Builder;
-
 @Builder
 public record TokenUsageRecord(
         String recordId,
