@@ -24,17 +24,16 @@ import java.util.concurrent.TimeUnit;
 public class UserMemoryStore {
 
     private static final String PREFIX = "ai:memory:";
-    // 将 EXACT_TTL_DAYS 从 30 改为 90+，与 RedisMemoryStore 的 TTL 对齐
-    private static final long EXACT_TTL_DAYS = 90L;
+    private static final long EXACT_TTL_DAYS = 100;
 
     /** 语义去重阈值：高于此分视为同一条 */
-    private static final double SEMANTIC_DUP_SCORE = 0.95;
+    private static final double SEMANTIC_DUP_SCORE = 0.9;
     /** 召回阈值 */
-    private static final double RECALL_MIN_SCORE   = 0.0;
+    private static final double RECALL_MIN_SCORE = 0.0;
 
     private final StringRedisTemplate redis;
     private final EmbeddingClient embeddingClient;
-    private final MemoryStore memoryStore;          // ★ 改为 MemoryStore
+    private final MemoryStore memoryStore;
 
     // =========================================================
     // 保存
@@ -42,51 +41,64 @@ public class UserMemoryStore {
     public void save(String userId, String type, String content, double importance) {
         if (content == null || content.isBlank()) return;
 
-//        String id = md5(userId + "|" + type + "|" + content.trim());
         String id = DigestUtils.md5(userId + "|" + type + "|" + content.trim());
         String exactKey = PREFIX + "exact:" + id;
 
-        // ① 先检查是否已存在
-        Boolean exists = redis.hasKey(exactKey);
-        if (Boolean.TRUE.equals(exists)) {
+        // ★ ① 原子抢闸：setIfAbsent 成功才继续
+        //    这样并发下只有一个请求能走到后面，避免重复入库
+        Boolean first = redis.opsForValue()
+                .setIfAbsent(exactKey, "1", EXACT_TTL_DAYS, TimeUnit.DAYS);
+        if (Boolean.FALSE.equals(first)) {
             log.info("[memory-save] 精确重复，跳过: userId={}, type={}", userId, type);
             return;
         }
 
-        // ② 计算 embedding（失败则直接返回，不写 exactKey）
-        List<Double> emb;
+        // ★ 从这里开始，任何中途失败都要回滚 exactKey
+        boolean shouldRollback = true;
         try {
-            emb = embeddingClient.embed(content);
-        } catch (Exception e) {
-            log.warn("[memory-save] embedding 失败，跳过: content={}", content, e);
-            return;
-        }
-        if (emb == null || emb.isEmpty()) {
-            log.warn("[memory-save] embedding 为空，跳过: content={}", content);
-            return;
-        }
+            // ② 算 embedding
+            List<Double> emb;
+            try {
+                emb = embeddingClient.embed(content);
+            } catch (Exception e) {
+                log.warn("[memory-save] embedding 失败，回滚 exactKey: content={}", content, e);
+                return;   // finally 里会回滚
+            }
+            if (emb == null || emb.isEmpty()) {
+                log.warn("[memory-save] embedding 为空，回滚 exactKey: content={}", content);
+                return;   // finally 里会回滚
+            }
 
-        // ③ 语义去重
-        List<MemoryHit> hits = memoryStore.searchHitsByUser(userId, emb, 1);
-        if (!hits.isEmpty() && hits.get(0).score() >= SEMANTIC_DUP_SCORE) {
-            MemoryHit hit = hits.get(0);
-            memoryStore.save(hit.item().withHit());
-            log.info("[memory-save] 语义重复(score={}), 累加命中", hit.score());
-            return;
+            // ③ 语义去重
+            List<MemoryHit> hits = memoryStore.searchHitsByUser(userId, emb, 1);
+            if (!hits.isEmpty() && hits.get(0).score() >= SEMANTIC_DUP_SCORE) {
+                MemoryHit hit = hits.get(0);
+                memoryStore.save(hit.item().withHit());
+                log.info("[memory-save] 语义重复(score={}), 累加命中, 保留 exactKey",
+                        hit.score());
+                shouldRollback = false;   // ★ 语义重复 = 已存在，保留 exactKey
+                return;
+            }
+
+            // ④ 真正入库
+            MemoryItem item = MemoryItem.of(userId, type, content.trim(), emb, importance);
+            memoryStore.save(item);
+
+            log.info("[memory-save] 保存成功: userId={}, type={}, content={}",
+                    userId, type, content);
+            shouldRollback = false;   // ★ 成功，保留 exactKey
+
+        } finally {
+            if (shouldRollback) {
+                // ★ 中途失败：回滚 exactKey，允许下次重试
+                try {
+                    redis.delete(exactKey);
+                    log.warn("[memory-save] 已回滚 exactKey: id={}", id);
+                } catch (Exception e) {
+                    log.error("[memory-save] 回滚 exactKey 失败: id={}", id, e);
+                }
+            }
         }
-
-        // ④ 真正入库
-        MemoryItem item = MemoryItem.of(userId, type, content.trim(), emb, importance);
-        memoryStore.save(item);
-
-        // ⑤ 入库成功后才写 exactKey（setIfAbsent 兜底并发）
-        Boolean first = redis.opsForValue()
-                .setIfAbsent(exactKey, "1", EXACT_TTL_DAYS, TimeUnit.DAYS);
-        if (Boolean.FALSE.equals(first)) {
-            log.debug("[memory-save] 并发重复，已忽略 exactKey: id={}", id);
-        }
-
-        log.info("[memory-save] 保存成功: userId={}, type={}, content={}", userId, type, content);
     }
 
     // =========================================================
@@ -113,5 +125,4 @@ public class UserMemoryStore {
                 hits.stream().map(h -> String.format("%.3f", h.score())).toList());
         return result;
     }
-
 }
