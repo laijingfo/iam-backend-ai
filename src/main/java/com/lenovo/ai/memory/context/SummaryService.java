@@ -12,20 +12,16 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.List;
 import java.util.stream.Collectors;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-/**
- * 对话摘要服务：把一段历史消息压缩成简洁摘要。
- *
- * @author laifo
- * @date 2026-10-10
- */
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class SummaryService {
 
     private static final String CACHE_PREFIX = "ai:summary:";
+    /** 用于生成缓存 key 的前缀消息数（稳定前缀，避免每次新消息 key 全变） */
+    private static final int PREFIX_MESSAGES = 5;
+    private static final int PREFIX_MAX_CHARS = 2000;
 
     private final LlmClient llmClient;
     private final RedisUtils redisUtils;
@@ -37,14 +33,20 @@ public class SummaryService {
     public String summarize(List<Message> messages, int maxWordSize) {
         if (messages == null || messages.isEmpty()) return "";
 
-        // ★ 用消息数量 + 内容 hash 的组合，避免每次 sublist 变化导致 key 全变
         String raw = messages.stream()
                 .map(m -> m.role() + ": " + m.content())
                 .collect(Collectors.joining("\n"));
 
-        // 只对前 N 条做 hash（前缀稳定）
-        int prefixLen = Math.min(raw.length(), 2000);
-        String cacheKey = CACHE_PREFIX + DigestUtils.md5(raw.substring(0, prefixLen));
+        // ★ 只用前 N 条消息的 hash 作为缓存 key（前缀稳定）
+        String prefix = messages.stream()
+                .limit(PREFIX_MESSAGES)
+                .map(m -> m.role() + ": " + m.content())
+                .collect(Collectors.joining("\n"));
+        if (prefix.length() > PREFIX_MAX_CHARS) {
+            prefix = prefix.substring(0, PREFIX_MAX_CHARS);
+        }
+        String cacheKey = CACHE_PREFIX + DigestUtils.md5(prefix)
+                + ":len" + messages.size();   // 加长度，避免前缀相同但整体不同
 
         try {
             Object cached = redisUtils.get(cacheKey);
@@ -91,5 +93,4 @@ public class SummaryService {
 
         return summary;
     }
-
 }

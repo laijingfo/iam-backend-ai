@@ -1,7 +1,5 @@
 package com.lenovo.ai.token.estimator;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.stereotype.Component;
 
 /**
  * @author laifo

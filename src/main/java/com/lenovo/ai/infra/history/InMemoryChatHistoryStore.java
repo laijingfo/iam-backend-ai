@@ -5,7 +5,6 @@ import com.lenovo.ai.llm.enums.MessageRole;
 import com.lenovo.dto.AiChatPolicyResponse;
 import com.lenovo.dto.AiChatSessionResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;

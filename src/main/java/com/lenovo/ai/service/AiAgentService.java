@@ -33,6 +33,7 @@ public class AiAgentService {
 
     private final Map<String, RequestState> requestsById = new ConcurrentHashMap<>();
     private final Map<String, String> activeByMemory = new ConcurrentHashMap<>();
+    private final Map<String, RequestState> activeBySession = new ConcurrentHashMap<>();
 
     public AiAgentService(ChatHistoryStore history,
                           RedisLockHelper redisLockHelper,
@@ -50,7 +51,6 @@ public class AiAgentService {
 
     public SseEmitter chat(ChatRequest request, String userId) {
 
-        // 1. 入口配额检查
         try {
             quotaService.checkOrThrow(userId);
         } catch (QuotaExceededException e) {
@@ -70,9 +70,7 @@ public class AiAgentService {
         String memoryId = userId + ":" + sessionId;
         String lockKey = "ai:chat:lock:" + memoryId;
         String lockToken = UUID.randomUUID().toString();
-        // ★ runId 服务端唯一，绝不使用客户端可伪造的值
         String runId = UUID.randomUUID().toString();
-        // ★ requestId 允许客户端指定（幂等 / 停止用），但不参与黑板 / AgentContext
         String requestId = (request.clientRequestId() != null && !request.clientRequestId().isBlank())
                 ? request.clientRequestId()
                 : UUID.randomUUID().toString();
@@ -85,6 +83,8 @@ public class AiAgentService {
             if (oldRequestId != null && !oldRequestId.equals(requestId)) {
                 RequestState oldState = requestsById.remove(oldRequestId);
                 if (oldState != null) {
+                    // ★ 用 remove(key, value) 语义 + 用 sessionId 当 key
+                    activeBySession.remove(sessionId, oldState);
                     try {
                         redisLockHelper.forceUnlock(oldState.lockKey);
                     } catch (Exception e) {
@@ -98,22 +98,23 @@ public class AiAgentService {
                             log.warn("关闭旧 emitter 异常", e);
                         }
                     }
+                    log.info(">>> 已替换旧请求: memoryId={}, old={}, new={}",
+                            memoryId, oldRequestId, requestId);
                 }
-                log.info(">>> 已替换旧请求: memoryId={}, old={}, new={}",
-                        memoryId, oldRequestId, requestId);
             }
 
             // 3. 注册请求状态
             RequestState state = new RequestState(
-                    requestId, runId, memoryId, lockToken, lockKey, emitter);
+                    requestId, runId, memoryId, sessionId, lockToken, lockKey, emitter);
             requestsById.put(requestId, state);
             activeByMemory.put(memoryId, requestId);
+            activeBySession.put(sessionId, state);
 
             // 4. 加锁
             boolean locked = redisLockHelper.tryLock(lockKey, lockToken, 300_000L);
             if (!locked) {
                 log.error(">>> 锁冲突: memoryId={}", memoryId);
-                cleanup(requestId);
+                cleanup(requestId, sessionId);
                 try {
                     emitter.send(SseEmitter.event().name("error")
                             .data(Map.of("message", "上一次请求尚未完成，请稍后再试")));
@@ -134,11 +135,11 @@ public class AiAgentService {
 
             // 6. 生命周期回调
             emitter.addCloseCallback(() -> {
-                cleanup(requestId);
+                cleanup(requestId, sessionId);
                 log.debug(">>> emitter close: requestId={}", requestId);
             });
 
-            // 7. 提交线程池 ★ 传 runId 和 requestId 两个
+            // 7. 提交线程池
             chatExecutor.execute(() -> runner.run(
                     request, context, userId, newSession, sessionId,
                     userMessageId, assistantMessageId, locale,
@@ -149,7 +150,7 @@ public class AiAgentService {
 
         } catch (Exception e) {
             log.error("chat() 入口异常", e);
-            cleanup(requestId);
+            cleanup(requestId, sessionId);
             try {
                 emitter.send(SseEmitter.event().name("error")
                         .data(Map.of("message", "系统繁忙，请稍后再试")));
@@ -159,18 +160,48 @@ public class AiAgentService {
         }
     }
 
+    /**
+     * 停止对话。
+     *
+     * <p><b>重要</b>：前端如果在发新请求前先 stop 旧请求，传的是<b>旧 requestId</b>。
+     * 此时 {@code requestsById} 里已经找不到（旧请求已结束），
+     * <b>不能</b>用 sessionId 兜底去杀当前活跃请求，否则会误杀刚发的新请求。</p>
+     *
+     * <p>规则：
+     * <ul>
+     *   <li>传了 {@code clientRequestId} 且找不到 → 忽略（旧请求）</li>
+     *   <li>没传 {@code clientRequestId} → 按 {@code sessionId} 兜底（前端主动停止当前会话）</li>
+     * </ul>
+     */
     public void stop(String sessionId, String userId, String clientRequestId) {
         if (sessionId == null || sessionId.isBlank() || userId == null) return;
-        if (clientRequestId == null || clientRequestId.isBlank()) return;
 
-        RequestState state = requestsById.remove(clientRequestId);
+        RequestState state = null;
+
+        if (clientRequestId != null && !clientRequestId.isBlank()) {
+            // ★ 传了 requestId：只按 requestId 查，找不到就忽略（不兜底）
+            state = requestsById.remove(clientRequestId);
+            if (state == null) {
+                log.info("stop() 未找到 requestId={}，忽略（可能是已结束的旧请求）", clientRequestId);
+                return;
+            }
+        } else {
+            // ★ 没传 requestId：按 sessionId 兜底（前端主动停止）
+            state = activeBySession.remove(sessionId);
+        }
+
         if (state == null) {
-            log.info("stop() 未找到 emitter: requestId={}", clientRequestId);
+            log.info("stop() 未找到 emitter: sessionId={}", sessionId);
             return;
         }
 
         log.info(">>> 停止会话: memoryId={}, requestId={}, runId={}",
-                state.memoryId, clientRequestId, state.runId);
+                state.memoryId, state.requestId, state.runId);
+
+        // 清理其它 map（用 remove(key, value) 避免误删新请求）
+        requestsById.remove(state.requestId, state);
+        activeByMemory.remove(state.memoryId, state.requestId);
+        activeBySession.remove(sessionId, state);
 
         try {
             if (!state.emitter.isClosed()) {
@@ -186,14 +217,24 @@ public class AiAgentService {
         } catch (Exception e) {
             log.error("释放 Redis 锁失败", e);
         }
-
-        activeByMemory.remove(state.memoryId, clientRequestId);
     }
 
-    private void cleanup(String requestId) {
+    /**
+     * 清理请求状态。
+     *
+     * <p>用 {@code remove(key, value)} 语义：只有当 map 里的值还是当前 state 时才移除，
+     * 避免把已经被新请求覆盖的条目误删。</p>
+     *
+     * @param requestId 请求 ID
+     * @param sessionId 会话 ID（activeBySession 的 key）
+     */
+    private void cleanup(String requestId, String sessionId) {
         RequestState state = requestsById.remove(requestId);
         if (state != null) {
-            activeByMemory.remove(state.memoryId, requestId);
+            activeByMemory.remove(state.memoryId, state.requestId);
+            if (sessionId != null) {
+                activeBySession.remove(sessionId, state);
+            }
         }
     }
 }

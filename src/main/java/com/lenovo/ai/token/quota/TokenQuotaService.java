@@ -3,13 +3,17 @@ package com.lenovo.ai.token.quota;
 import com.lenovo.ai.token.config.TokenProperties;
 import com.lenovo.ai.token.constant.TokenRedisKeys;
 import com.lenovo.ai.token.exception.QuotaExceededException;
+import com.lenovo.ai.token.metrics.TokenMetrics;
 import com.lenovo.ai.token.model.QuotaStatus;
 import com.lenovo.ai.token.model.TokenQuota;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -17,11 +21,14 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class TokenQuotaService {
 
+    private static final byte[] FIELD_COST_B =
+            TokenRedisKeys.FIELD_COST.getBytes(StandardCharsets.UTF_8);
+
     private final StringRedisTemplate redis;
     private final QuotaResolver quotaResolver;
     private final TokenProperties properties;
+    private final TokenMetrics tokenMetrics;   // ★ 新增
 
-    /** 查询配额状态 */
     public QuotaStatus check(String userId) {
         TokenQuota quota = loadQuota(userId);
 
@@ -29,17 +36,29 @@ public class TokenQuotaService {
             return QuotaStatus.exceeded(userId, quota.tier(), "账户已禁用");
         }
 
-        // 日用量
         String dayKey = TokenRedisKeys.usageDay(userId);
-        Map<Object, Object> dayUsage = redis.opsForHash().entries(dayKey);
-        long dUsed = parseLong(dayUsage.get("totalTokens"));
-        double dayCost = readCostMicro(TokenRedisKeys.costDay(userId));
-
-        // 月用量
         String monthKey = TokenRedisKeys.usageMonth(userId);
-        Map<Object, Object> monthUsage = redis.opsForHash().entries(monthKey);
-        long mUsed = parseLong(monthUsage.get("totalTokens"));
-        double monthCost = readCostMicro(TokenRedisKeys.costMonth(userId));
+        String costDayKey = TokenRedisKeys.costDay(userId);
+        String costMonthKey = TokenRedisKeys.costMonth(userId);
+
+        // ★ pipeline：一次往返取 4 个值
+        List<Object> results = redis.executePipelined((RedisCallback<Object>) connection -> {
+            connection.hGetAll(dayKey.getBytes(StandardCharsets.UTF_8));
+            connection.hGetAll(monthKey.getBytes(StandardCharsets.UTF_8));
+            connection.hGet(costDayKey.getBytes(StandardCharsets.UTF_8), FIELD_COST_B);
+            connection.hGet(costMonthKey.getBytes(StandardCharsets.UTF_8), FIELD_COST_B);
+            return null;
+        });
+
+        long dUsed = 0, mUsed = 0;
+        double dayCost = 0.0, monthCost = 0.0;
+
+        if (results != null && results.size() >= 4) {
+            dUsed = parseTotalTokens(results.get(0));
+            mUsed = parseTotalTokens(results.get(1));
+            dayCost = parseCostMicro(results.get(2));
+            monthCost = parseCostMicro(results.get(3));
+        }
 
         boolean exceeded = false;
         String reason = null;
@@ -60,7 +79,14 @@ public class TokenQuotaService {
 
     public void checkOrThrow(String userId) {
         QuotaStatus s = check(userId);
-        if (s.exceeded()) throw new QuotaExceededException(userId, s.reason());
+        if (s.exceeded()) {
+            try {
+                tokenMetrics.recordQuotaExceeded(userId, s.reason());
+            } catch (Exception me) {
+                log.warn("[quota] 指标上报失败", me);
+            }
+            throw new QuotaExceededException(userId, s.reason());
+        }
     }
 
     public void checkSingleRequest(String userId, int estimatedTokens) {
@@ -75,7 +101,6 @@ public class TokenQuotaService {
         String key = TokenRedisKeys.quota(userId);
         Map<Object, Object> m = redis.opsForHash().entries(key);
 
-        // ★ 关键：key 不存在 OR 字段缺失时，都走默认
         if (m == null || m.isEmpty() || !m.containsKey("monthlyLimit")) {
             log.info("[quota] 用户 {} 无有效配额，走默认 tier={}", userId, properties.getDefaultTier());
             return quotaResolver.byTier(userId, properties.getDefaultTier());
@@ -104,12 +129,31 @@ public class TokenQuotaService {
         log.info("[quota] 设置: userId={}, tier={}", quota.userId(), quota.tier());
     }
 
-    /** 从 hash 读成本（微元 -> 元） */
-    private double readCostMicro(String key) {
-        Object v = redis.opsForHash().get(key, TokenRedisKeys.FIELD_COST);
-        if (v == null) return 0.0;
+    // ===== 工具 =====
+
+    private static long parseTotalTokens(Object raw) {
+        if (!(raw instanceof Map<?, ?> m)) return 0;
+        Object v = m.get("totalTokens");
+        if (v == null) {
+            // byte[] key 的情况
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                String k = e.getKey() instanceof byte[] b
+                        ? new String(b, StandardCharsets.UTF_8)
+                        : String.valueOf(e.getKey());
+                if ("totalTokens".equals(k)) return parseLong(e.getValue());
+            }
+            return 0;
+        }
+        return parseLong(v);
+    }
+
+    private static double parseCostMicro(Object raw) {
+        if (raw == null) return 0.0;
         try {
-            return Long.parseLong(String.valueOf(v)) / (double) TokenRedisKeys.MICRO_CNY;
+            String s = raw instanceof byte[] b
+                    ? new String(b, StandardCharsets.UTF_8)
+                    : String.valueOf(raw);
+            return Long.parseLong(s) / (double) TokenRedisKeys.MICRO_CNY;
         } catch (NumberFormatException e) {
             return 0.0;
         }
@@ -117,7 +161,13 @@ public class TokenQuotaService {
 
     private static long parseLong(Object v) {
         if (v == null) return 0;
-        try { return Long.parseLong(String.valueOf(v)); } catch (Exception e) { return 0; }
+        try {
+            String s = v instanceof byte[] b
+                    ? new String(b, StandardCharsets.UTF_8)
+                    : String.valueOf(v);
+            return Long.parseLong(s);
+        } catch (Exception e) { return 0; }
     }
+
     private static String str(Object v) { return v == null ? "" : String.valueOf(v); }
 }

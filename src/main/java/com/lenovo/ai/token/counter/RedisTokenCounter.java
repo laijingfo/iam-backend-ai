@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lenovo.ai.token.config.TokenProperties;
 import com.lenovo.ai.token.constant.TokenRedisKeys;
 import com.lenovo.ai.token.cost.CostCalculator;
+import com.lenovo.ai.token.metrics.TokenMetrics;
 import com.lenovo.ai.token.model.TokenUsage;
 import com.lenovo.ai.token.model.TokenUsageRecord;
 import lombok.RequiredArgsConstructor;
@@ -27,13 +28,14 @@ public class RedisTokenCounter implements TokenCounter {
     private static final long MONTH_TTL_DAYS = 400L;
     private static final int MAX_RECORDS_PER_DAY = 100;
 
+    private static final byte[] FIELD_COST_B =
+            TokenRedisKeys.FIELD_COST.getBytes(StandardCharsets.UTF_8);
+
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redis;
     private final CostCalculator costCalculator;
     private final TokenProperties properties;
-
-    private static final byte[] FIELD_COST_B =
-            TokenRedisKeys.FIELD_COST.getBytes(StandardCharsets.UTF_8);
+    private final TokenMetrics tokenMetrics;   // ★ 新增
 
     @Override
     public void record(String userId, String sessionId, String runId,
@@ -101,6 +103,13 @@ public class RedisTokenCounter implements TokenCounter {
                         log.error("[token-record] pipeline 第 {} 条命令失败: {}", i, t.getMessage());
                     }
                 }
+            }
+
+            // ★ 上报指标（失败不影响主流程）
+            try {
+                tokenMetrics.recordUsage(userId, modelName, usage, cost);
+            } catch (Exception me) {
+                log.warn("[token-record] 指标上报失败", me);
             }
 
             log.info("[token-record] userId={}, model={}, in={}, out={}, cached={}, cost=¥{}",
