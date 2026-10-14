@@ -1,4 +1,4 @@
-package com.lenovo.ai.memory;
+package com.lenovo.ai.memory.embedding;
 
 import java.util.List;
 

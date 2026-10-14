@@ -1,5 +1,8 @@
-package com.lenovo.ai.memory;
+package com.lenovo.ai.memory.store;
 
+import com.lenovo.ai.memory.embedding.EmbeddingClient;
+import com.lenovo.ai.memory.model.MemoryHit;
+import com.lenovo.ai.memory.model.MemoryItem;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -10,6 +13,12 @@ import java.security.MessageDigest;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 用户记忆业务门面：编排 embedding、精确/语义去重、召回。
+ *
+ * @apiNote 仅限 memory 模块内部使用，外部调用方请通过
+ *          {@link com.lenovo.ai.memory.facade.MemoryFacade}。
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -21,11 +30,11 @@ public class UserMemoryStore {
     /** 语义去重阈值：高于此分视为同一条 */
     private static final double SEMANTIC_DUP_SCORE = 0.95;
     /** 召回阈值 */
-    private static final double RECALL_MIN_SCORE   = 0.55;
+    private static final double RECALL_MIN_SCORE   = 0.0;
 
     private final StringRedisTemplate redis;
     private final EmbeddingClient embeddingClient;
-    private final MemoryVectorStore vectorStore;
+    private final MemoryStore memoryStore;          // ★ 改为 MemoryStore
 
     // =========================================================
     // 保存
@@ -45,7 +54,6 @@ public class UserMemoryStore {
             return;
         }
 
-        // ★ 统一用 List<Double>（和 EmbeddingClient 返回值一致）
         List<Double> emb = embeddingClient.embed(content);
         if (emb == null || emb.isEmpty()) {
             log.warn("[memory-save] embedding 为空，跳过: content={}", content);
@@ -53,18 +61,18 @@ public class UserMemoryStore {
         }
 
         // ② 语义去重
-        List<MemoryHit> hits = vectorStore.search(userId, emb, 1);
+        List<MemoryHit> hits = memoryStore.searchHitsByUser(userId, emb, 1);
         if (!hits.isEmpty() && hits.get(0).score() >= SEMANTIC_DUP_SCORE) {
             MemoryHit hit = hits.get(0);
-            vectorStore.update(hit.item().withHit());   // ← 现在有了
+            memoryStore.save(hit.item().withHit());   // ★ 命中累加直接 save
             log.info("[memory-save] 语义重复(score={})，累加命中: userId={}, content={}",
                     hit.score(), userId, content);
             return;
         }
 
-        // ③ 真入库：用 MemoryItem.of 生成（id 用 UUID，保证唯一）
+        // ③ 真入库
         MemoryItem item = MemoryItem.of(userId, type, content.trim(), emb, importance);
-        vectorStore.add(userId, item, emb);
+        memoryStore.save(item);
         log.info("[memory-save] userId={}, type={}, content={}", userId, type, content);
     }
 
@@ -80,7 +88,7 @@ public class UserMemoryStore {
             return List.of();
         }
 
-        List<MemoryHit> hits = vectorStore.search(userId, emb, topK);
+        List<MemoryHit> hits = memoryStore.searchHitsByUser(userId, emb, topK);
 
         List<MemoryItem> result = hits.stream()
                 .filter(h -> h.score() >= RECALL_MIN_SCORE)

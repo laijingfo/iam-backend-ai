@@ -1,13 +1,14 @@
-package com.lenovo.ai.memory;
+package com.lenovo.ai.memory.model;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * 长期记忆项。
- * id 采用 userId|type|content 的 md5，保证同一条记忆 id 稳定（便于去重/更新）。
+ * <p>
+ * id 由 UUID 生成，保证全局唯一；
+ * 精确去重由 UserMemoryStore 的 setIfAbsent 保证（md5(userId|type|content)）；
+ * 语义去重由向量检索相似度保证。
  */
 public record MemoryItem(
         String id,
@@ -35,7 +36,7 @@ public record MemoryItem(
                 embedding, imp, now, now, false);
     }
 
-    /** ★ 新增：命中累加（importance 微增，updatedAt 刷新） */
+    /** 命中累加（importance 微增，updatedAt 刷新） */
     public MemoryItem withHit() {
         return new MemoryItem(
                 id, userId, type, content, embedding,

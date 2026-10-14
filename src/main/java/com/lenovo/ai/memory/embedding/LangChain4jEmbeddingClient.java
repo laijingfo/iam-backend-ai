@@ -1,4 +1,4 @@
-package com.lenovo.ai.memory;
+package com.lenovo.ai.memory.embedding;
 
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;

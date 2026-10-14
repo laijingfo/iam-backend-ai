@@ -89,7 +89,7 @@ public class SendMailTask {
         variables.put("{appId}", StringUtils.defaultString(alert.getCmdbId()));
         variables.put("{appName}", StringUtils.defaultString(alert.getAppName()));
         variables.put("{itCodeOfUser}", StringUtils.defaultString(alert.getUserItCode()));
-        variables.put("{userCocType}", StringUtils.defaultString(alert.getUserCocType()));
+        variables.put("{userType}", StringUtils.defaultString(alert.getUserCocType()));
         variables.put("{systemRole}", StringUtils.defaultString(alert.getSystemRole()));
         variables.put("{accessLabel}", StringUtils.defaultString(alert.getRoleClassification()));
         variables.put("{alertTriggerTime}", alert.getAlertTriggerTime() == null

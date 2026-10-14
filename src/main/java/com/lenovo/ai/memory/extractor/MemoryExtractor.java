@@ -1,6 +1,7 @@
-package com.lenovo.ai.memory;
+package com.lenovo.ai.memory.extractor;
 
 import com.lenovo.ai.llm.Message;
+import com.lenovo.ai.memory.store.UserMemoryStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -10,13 +11,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+/**
+ * 记忆抽取调度器。
+ *
+ * @apiNote 仅限 memory 模块内部使用，外部调用方请通过
+ *          {@link com.lenovo.ai.memory.facade.MemoryFacade#extractAsync(String, java.util.List)}。
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class MemoryExtractor {
 
-    private final UserMemoryStore userMemoryStore;   // ★ 只依赖 UserMemoryStore
-    private final SummaryUtil summaryUtil;
+    private final UserMemoryStore userMemoryStore;
+    private final MemoryParser memoryParser;
 
     @Async("memoryExecutor")
     public void extract(String userId, List<Message> turn) {
@@ -31,7 +38,7 @@ public class MemoryExtractor {
 
             log.info(">>> 开始抽取记忆：userId={}, 对话长度={} 字符", userId, dialog.length());
 
-            List<Map<String, Object>> items = summaryUtil.extractLongTermMemoriesAsList(dialog);
+            List<Map<String, Object>> items = memoryParser.extractAsList(dialog);
             log.info(">>> 记忆抽取完成：userId={}, 抽取到 {} 条记忆", userId,
                     items == null ? 0 : items.size());
 
@@ -64,7 +71,6 @@ public class MemoryExtractor {
                 importance = ((Number) imp).doubleValue();
             }
 
-            // ★ 所有去重、embedding、入库逻辑统一由 UserMemoryStore 负责
             userMemoryStore.save(userId, type, content, importance);
 
         } catch (Exception e) {
