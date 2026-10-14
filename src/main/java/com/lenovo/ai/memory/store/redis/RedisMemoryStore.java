@@ -5,7 +5,6 @@ import com.lenovo.ai.memory.model.MemoryItem;
 import com.lenovo.ai.memory.store.MemoryMaintenanceStore;
 import com.lenovo.ai.memory.store.MemoryStore;
 import com.lenovo.ai.memory.util.RedisBytes;
-import com.lenovo.ai.memory.util.RedisValueUtils;
 import com.lenovo.ai.memory.util.VectorUtils;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import io.lettuce.core.AbstractRedisClient;
@@ -245,19 +244,25 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         byte[] embeddingBytes = VectorUtils.toFloatBytes(item.embedding());
 
         try {
+//            withCommands(
+//                    cmd -> {
+//                        writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
+//                        cmd.expire(keyBytes, TTL_SECONDS);
+//                        return null;
+//                    },
+//                    cmd -> {
+//                        writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
+//                        cmd.expire(keyBytes, TTL_SECONDS);
+//                        return null;
+//                    }
+//            );
+            writeFields((k, v) -> hsetBoth(keyBytes, k, v), item, embeddingBytes);
             withCommands(
-                    cmd -> {
-                        writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
-                        cmd.expire(keyBytes, TTL_SECONDS);
-                        return null;
-                    },
-                    cmd -> {
-                        writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
-                        cmd.expire(keyBytes, TTL_SECONDS);
-                        return null;
-                    }
+                    cmd -> cmd.expire(keyBytes, TTL_SECONDS),
+                    cmd -> cmd.expire(keyBytes, TTL_SECONDS)
             );
         } catch (Exception e) {
+
             log.error(">>> 保存记忆主数据失败, key={}", key, e);
             return;
         }
@@ -380,80 +385,192 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         byte[] keyBytes = b(k);
         try {
             long now = System.currentTimeMillis();
-            withCommands(
-                    cmd -> {
-                        cmd.hset(keyBytes, b(FIELD_INVALID), b("1"));
-                        cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
-                        return null;
-                    },
-                    cmd -> {
-                        cmd.hset(keyBytes, b(FIELD_INVALID), b("1"));
-                        cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
-                        return null;
-                    }
-            );
+//            withCommands(
+//                    cmd -> {
+//                        cmd.hset(keyBytes, b(FIELD_INVALID), b("1"));
+//                        cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
+//                        return null;
+//                    },
+//                    cmd -> {
+//                        cmd.hset(keyBytes, b(FIELD_INVALID), b("1"));
+//                        cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
+//                        return null;
+//                    }
+//            );
+            hsetBoth(keyBytes, b(FIELD_INVALID), b("1"));
+            hsetBoth(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
         } catch (Exception e) {
             log.error(">>> 失效记忆失败, memoryId={}", memoryId, e);
         }
     }
 
+    /**
+     * 全量衰减某用户的所有记忆。
+     * <p>
+     * 衰减逻辑：
+     * <ul>
+     *   <li>读取每条记忆的 importance</li>
+     *   <li>乘以衰减因子 factor（如 0.95）</li>
+     *   <li>写回 importance 和 updatedAt</li>
+     * </ul>
+     * </p>
+     *
+     * @param userId 用户 ID
+     * @param factor 衰减因子，取值范围 (0, 1]，如 0.95 表示每次衰减 5%
+     * @return 实际衰减成功的条数（不含已失效/读取失败的条目）
+     */
     @Override
-    public void decayAll(String userId, double factor) {
+    public int decayAll(String userId, double factor) {
+        if (userId == null || userId.isBlank()) {
+            log.warn(">>> decayAll 跳过：userId 为空");
+            return 0;
+        }
+        if (factor <= 0 || factor > 1) {
+            log.warn(">>> decayAll 跳过：factor 非法, factor={}", factor);
+            return 0;
+        }
+
         Set<String> ids = stringRedisTemplate.opsForSet().members(MemoryKeys.userSet(userId));
-        if (ids == null || ids.isEmpty()) return;
+        if (ids == null || ids.isEmpty()) {
+            log.debug(">>> decayAll: 用户 {} 无记忆，跳过", userId);
+            return 0;
+        }
+
+        int successCount = 0;
+        int skipCount = 0;
+        int failCount = 0;
+        long now = System.currentTimeMillis();
 
         for (String id : ids) {
             String k = MemoryKeys.item(userId, id);
-            byte[] keyBytes = b(k);
-            Map<String, Object> hash = readHashNative(k);
-            if (hash.isEmpty() || "1".equals(hash.get(FIELD_INVALID))) continue;
 
-            double importance = RedisValueUtils.parseDouble(hash.get(FIELD_IMPORTANCE), 0.5);
+            // 1. 读取当前 Hash
+            Map<String, Object> hash = readHashNative(k);
+            if (hash.isEmpty()) {
+                skipCount++;   // 记忆已被删除（TTL 过期或手动删）
+                continue;
+            }
+            // 2. 跳过已失效的
+            if ("1".equals(hash.get(FIELD_INVALID))) {
+                skipCount++;
+                continue;
+            }
+
+            // 3. 计算新 importance
+            double importance = RedisBytes.asDouble(hash.get(FIELD_IMPORTANCE), 0.5);
+            double newImp = importance * factor;
+
+            // 4. 写回
             try {
-                long now = System.currentTimeMillis();
-                double newImp = importance * factor;
-                withCommands(
-                        cmd -> {
-                            cmd.hset(keyBytes, b(FIELD_IMPORTANCE), b(String.valueOf(newImp)));
-                            cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
-                            return null;
-                        },
-                        cmd -> {
-                            cmd.hset(keyBytes, b(FIELD_IMPORTANCE), b(String.valueOf(newImp)));
-                            cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
-                            return null;
-                        }
-                );
+                byte[] keyBytes = b(k);
+                hsetBoth(keyBytes, b(FIELD_IMPORTANCE), b(String.valueOf(newImp)));
+                hsetBoth(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
+                successCount++;
             } catch (Exception e) {
                 log.warn(">>> decay 失败, key={}", k, e);
+                failCount++;
             }
         }
+
+        if (successCount > 0 || failCount > 0) {
+            log.info(">>> decayAll 完成: userId={}, 总={}, 成功={}, 跳过={}, 失败={}, factor={}",
+                    userId, ids.size(), successCount, skipCount, failCount, factor);
+        }
+        return successCount;
     }
 
+    /**
+     * 删除重要性低于阈值的记忆。
+     * <p>
+     * 删除逻辑：
+     * <ol>
+     *   <li>读取每条记忆的 importance</li>
+     *   <li>若 importance &lt; threshold，则：
+     *     <ul>
+     *       <li>删除主数据 Hash</li>
+     *       <li>从用户 ID 集合中移除</li>
+     *       <li>删除反向索引</li>
+     *     </ul>
+     *   </li>
+     * </ol>
+     * </p>
+     *
+     * @param userId    用户 ID
+     * @param threshold 阈值，importance 低于该值将被删除
+     * @return 实际删除的条数
+     */
     @Override
-    public void deleteBelow(String userId, double threshold) {
+    public int deleteBelow(String userId, double threshold) {
+        if (userId == null || userId.isBlank()) {
+            log.warn(">>> deleteBelow 跳过：userId 为空");
+            return 0;
+        }
+        if (threshold < 0 || threshold > 1) {
+            log.warn(">>> deleteBelow 跳过：threshold 非法, threshold={}", threshold);
+            return 0;
+        }
+
         Set<String> ids = stringRedisTemplate.opsForSet().members(MemoryKeys.userSet(userId));
-        if (ids == null || ids.isEmpty()) return;
+        if (ids == null || ids.isEmpty()) {
+            log.debug(">>> deleteBelow: 用户 {} 无记忆，跳过", userId);
+            return 0;
+        }
+
+        int deletedCount = 0;
+        int skipCount = 0;
+        int failCount = 0;
 
         for (String id : ids) {
             String k = MemoryKeys.item(userId, id);
-            Map<String, Object> hash = readHashNative(k);
-            if (hash.isEmpty() || "1".equals(hash.get(FIELD_INVALID))) continue;
 
-            double importance = RedisValueUtils.parseDouble(hash.get(FIELD_IMPORTANCE), 0.5);
-            if (importance < threshold) {
+            // 1. 读取当前 Hash
+            Map<String, Object> hash = readHashNative(k);
+            if (hash.isEmpty()) {
+                // 主数据已不存在，顺手清理辅助索引
                 try {
-                    withCommands(
-                            cmd -> cmd.del(b(k)),
-                            cmd -> cmd.del(b(k))
-                    );
                     stringRedisTemplate.opsForSet().remove(MemoryKeys.userSet(userId), id);
                     stringRedisTemplate.delete(MemoryKeys.reverse(id));
                 } catch (Exception e) {
-                    log.warn(">>> 删除低分记忆失败, key={}", k, e);
+                    log.warn(">>> 清理孤儿索引失败, id={}", id, e);
                 }
+                skipCount++;
+                continue;
+            }
+
+            // 2. 跳过已失效的（不重复处理）
+            if ("1".equals(hash.get(FIELD_INVALID))) {
+                skipCount++;
+                continue;
+            }
+
+            // 3. 判断是否低于阈值
+            double importance = RedisBytes.asDouble(hash.get(FIELD_IMPORTANCE), 0.5);
+            if (importance >= threshold) {
+                skipCount++;
+                continue;
+            }
+
+            // 4. 删除：主数据 + 用户集 + 反向索引
+            try {
+                byte[] keyBytes = b(k);
+                delBoth(keyBytes);
+                stringRedisTemplate.opsForSet().remove(MemoryKeys.userSet(userId), id);
+                stringRedisTemplate.delete(MemoryKeys.reverse(id));
+                deletedCount++;
+
+                log.debug(">>> 删除低分记忆: userId={}, id={}, importance={}",
+                        userId, id, importance);
+            } catch (Exception e) {
+                log.warn(">>> 删除低分记忆失败, key={}", k, e);
+                failCount++;
             }
         }
+
+        if (deletedCount > 0 || failCount > 0) {
+            log.info(">>> deleteBelow 完成: userId={}, 总={}, 删除={}, 跳过={}, 失败={}, threshold={}",
+                    userId, ids.size(), deletedCount, skipCount, failCount, threshold);
+        }
+        return deletedCount;
     }
 
     // ===================== 原生 Hash 读取 =====================
@@ -462,10 +579,7 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         byte[] keyBytes = b(key);
         Map<String, Object> result = new HashMap<>();
         try {
-            Map<byte[], byte[]> raw = withCommands(
-                    cmd -> cmd.hgetall(keyBytes),
-                    cmd -> cmd.hgetall(keyBytes)
-            );
+            Map<byte[], byte[]> raw = hgetAllBoth(keyBytes);
             if (raw == null || raw.isEmpty()) return result;
 
             for (Map.Entry<byte[], byte[]> e : raw.entrySet()) {
@@ -631,9 +745,9 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
                 RedisBytes.asString(hash.get(FIELD_TYPE)),
                 RedisBytes.asString(hash.get(FIELD_CONTENT)),
                 List.of(),
-                RedisValueUtils.parseDouble(hash.get(FIELD_IMPORTANCE), 0.5),
-                RedisValueUtils.parseLong(hash.get(FIELD_CREATED_AT), 0L),
-                RedisValueUtils.parseLong(hash.get(FIELD_UPDATED), 0L),
+                RedisBytes.asDouble(hash.get(FIELD_IMPORTANCE), 0.5),
+                RedisBytes.asLong(hash.get(FIELD_CREATED_AT), 0L),
+                RedisBytes.asLong(hash.get(FIELD_UPDATED), 0L),
                 "1".equals(RedisBytes.asString(hash.get(FIELD_INVALID)))
         );
     }
@@ -660,35 +774,39 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
 
             Map<String, Object> fields = extractDocFields(doc);
 
-            // 防御性校验 userId
+            // ★★★ 关键修复：先保存 score 对象
+            Object scoreObj = fields.get(FIELD_SCORE);
+
             String uid = RedisBytes.asString(fields.get(FIELD_USER_ID));
             if (expectedUserId != null && uid != null && !expectedUserId.equals(uid)) {
-                log.warn(">>> KNN 结果 userId 不匹配, 期望={}, 实际={}, 丢弃", expectedUserId, uid);
+                log.warn(">>> KNN 结果 userId 不匹配, 丢弃");
                 continue;
             }
 
             String memoryId = RedisBytes.asString(fields.get(FIELD_ID));
             if (memoryId == null || memoryId.isBlank()) {
-                log.warn(">>> KNN 结果缺少 memoryId, 丢弃。fields keys={}", fields.keySet());
+                log.warn(">>> KNN 结果缺少 memoryId, 丢弃");
                 continue;
             }
 
-            // ★ 回查 Hash 补全 importance/createdAt/updatedAt/invalid
+            // ★ 回查 Hash 补全，但保留 score
             String redisKey = RedisBytes.asString(fields.get(FIELD_REDIS_KEY));
             if (redisKey != null) {
                 Map<String, Object> hash = readHashNative(redisKey);
                 if (!hash.isEmpty()) {
-                    // Hash 里的字段更全、更权威，覆盖 RESP3 返回的部分字段
                     hash.putIfAbsent(FIELD_USER_ID, uid);
                     hash.putIfAbsent(FIELD_ID, memoryId);
+                    // ★ 关键：保留 score
+                    if (scoreObj != null) {
+                        hash.put(FIELD_SCORE, scoreObj);
+                    }
                     fields = hash;
                 }
             }
 
             MemoryItem item = toItem(fields);
 
-            // score 是 KNN 的 COSINE distance（越小越相似），转成 similarity
-            double distance = RedisValueUtils.parseDouble(fields.get(FIELD_SCORE), 1.0);
+            double distance = RedisBytes.asDouble(fields.get(FIELD_SCORE), 1.0);
             double similarity = 1.0 - distance;
             result.add(new MemoryHit(item, similarity));
         }
@@ -768,5 +886,30 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
 
         log.info(">>> 用户 {} 共有 {} 条记忆", userId, result.size());
         return result;
+    }
+
+
+    /** 统一执行单机/集群的 hset */
+    private void hsetBoth(byte[] key, byte[] field, byte[] value) {
+        withCommands(
+                cmd -> { cmd.hset(key, field, value); return null; },
+                cmd -> { cmd.hset(key, field, value); return null; }
+        );
+    }
+
+    /** 统一执行 del */
+    private long delBoth(byte[] key) {
+        return withCommands(
+                cmd -> cmd.del(key),
+                cmd -> cmd.del(key)
+        );
+    }
+
+    /** 统一执行 hgetall */
+    private Map<byte[], byte[]> hgetAllBoth(byte[] key) {
+        return withCommands(
+                cmd -> cmd.hgetall(key),
+                cmd -> cmd.hgetall(key)
+        );
     }
 }

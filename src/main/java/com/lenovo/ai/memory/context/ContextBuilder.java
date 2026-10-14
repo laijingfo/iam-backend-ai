@@ -46,7 +46,12 @@ public class ContextBuilder {
             int splitIdx = dialog.size() - KEEP_RECENT_TURNS * 2;
             List<Message> old = dialog.subList(0, splitIdx);
             List<Message> recent = dialog.subList(splitIdx, dialog.size());
-            result.add(Message.system("[历史对话摘要]\n" + summaryService.summarize(old)));
+
+            // ★ 摘要改为 assistant 角色，作为历史消息参与预算
+            String summary = summaryService.summarize(old);
+            if (summary != null && !summary.isBlank()) {
+                result.add(Message.assistant("[历史对话摘要]\n" + summary));
+            }
             result.addAll(recent);
         }
 

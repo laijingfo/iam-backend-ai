@@ -32,7 +32,8 @@ public class AgentLoop {
 
     private static final int MAX_STEPS = 8;
     private static final int TOOL_TIMEOUT_SECONDS = 30;
-
+    // ★ 新增常量
+    private static final int TOOL_RESULT_MAX_CHARS = 8000;
     private final LlmClient llmClient;
     private final ToolRegistry toolRegistry;
     private final ChatHistoryStore history;
@@ -45,7 +46,6 @@ public class AgentLoop {
     public void run(AgentContext ctx) {
         try {
             List<Message> messages = new ArrayList<>(ctx.messages());
-
             List<ToolSpec> tools = toolRegistry.availableTools(
                     ctx.toolContext(), ctx.allowedToolNames());
 
@@ -64,54 +64,45 @@ public class AgentLoop {
                             ctx.runId(), step);
                     return;
                 }
-                log.info(">>> AgentLoop step={}, runId={}, agent={}",
-                        step, ctx.runId(), ctx.agentName());
 
                 // ==================================================
-                // 6. LLM 调用
-                // ==================================================
-                LlmResponse resp = llmClient.chatStream(messages, tools, ctx.emitter());
-
-                // ==================================================
-                // ★★★ 改动 1：记录 token ★★★
-                // ==================================================
-                try {
-                    TokenUsage usage = TokenUsage.fromLlmResponse(resp);
-                    tokenCounter.record(userId, ctx.sessionId(), ctx.runId(),
-                            modelName, usage);
-                    log.debug(">>> token 已记录: runId={}, step={}, in={}, out={}",
-                            ctx.runId(), step, usage.inputTokens(), usage.outputTokens());
-                } catch (Exception e) {
-                    log.warn(">>> token 记录失败: runId={}, step={}", ctx.runId(), step, e);
-                    // 不影响主流程
-                }
-
-                // ==================================================
-                // ★★★ 改动 2：二次校验配额 ★★★
+                // ★ 优化 2-1：配额检查前置（在 LLM 调用之前）
                 // ==================================================
                 try {
                     QuotaStatus status = quotaService.check(userId);
                     if (status.exceeded()) {
-                        log.warn("[quota] 会话中途超限: userId={}, runId={}, reason={}",
+                        log.warn("[quota] 调用前超限: userId={}, runId={}, reason={}",
                                 userId, ctx.runId(), status.reason());
-                        throw new QuotaExceededException(userId, status.reason());
+                        sendEvent(ctx.emitter(), "error", Map.of(
+                                "code", "QUOTA_EXCEEDED",
+                                "message", status.reason()));
+                        history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(),
+                                "[已超出 token 配额，对话终止]");
+                        ctx.emitter().complete();
+                        return;
                     }
-                } catch (QuotaExceededException qe) {
-                    // 配额超限 → 发送专门的错误事件并结束
-                    sendEvent(ctx.emitter(), "error", Map.of(
-                            "code", "QUOTA_EXCEEDED",
-                            "message", qe.getReason()));
-                    history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(),
-                            "[已超出 token 配额，对话终止]");
-                    ctx.emitter().complete();
-                    return;
                 } catch (Exception e) {
                     log.warn(">>> 配额检查失败，忽略继续: runId={}", ctx.runId(), e);
                 }
 
+                log.info(">>> AgentLoop step={}, runId={}, agent={}",
+                        step, ctx.runId(), ctx.agentName());
+
                 // ==================================================
-                // 7. 无工具调用 → 最终答案
+                // LLM 调用
                 // ==================================================
+                LlmResponse resp = llmClient.chatStream(messages, tools, ctx.emitter());
+
+                // 记录 token（不阻断）
+                try {
+                    TokenUsage usage = TokenUsage.fromLlmResponse(resp);
+                    tokenCounter.record(userId, ctx.sessionId(), ctx.runId(),
+                            modelName, usage);
+                } catch (Exception e) {
+                    log.warn(">>> token 记录失败: runId={}, step={}", ctx.runId(), step, e);
+                }
+
+                // 无工具调用 → 最终答案
                 if (!resp.hasToolCalls()) {
                     history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), resp.content());
                     sendEvent(ctx.emitter(), "done", Map.of("messageId", ctx.assistantMessageId()));
@@ -131,7 +122,8 @@ public class AgentLoop {
                         continue;
                     }
 
-                    if (!toolRegistry.isAllowed(call.name(), ctx.toolContext())) {
+                    // ★ 优化 1：双重校验
+                    if (!toolRegistry.isAllowed(call.name(), ctx.toolContext(), ctx.allowedToolNames())) {
                         messages.add(Message.toolResult(call.id(), "无权限调用该工具"));
                         sendEvent(ctx.emitter(), "tool", Map.of(
                                 "name", call.name(),
@@ -157,13 +149,18 @@ public class AgentLoop {
 
                     ToolResult result = executeWithGuard(tool, call, ctx);
 
+                    // ==================================================
+                    // ★ 优化 2-2：工具结果截断（防止上下文爆炸）
+                    // ==================================================
+                    String truncated = truncateToolResult(result.content(), TOOL_RESULT_MAX_CHARS);
+
                     sendEvent(ctx.emitter(), "tool", Map.of(
                             "name", call.name(),
                             "args", call.args(),
                             "status", result.success() ? "completed" : "failed",
-                            "result", result.content()));
+                            "result", truncated));
 
-                    messages.add(Message.toolResult(call.id(), result.content()));
+                    messages.add(Message.toolResult(call.id(), truncated));
                 }
             }
 
@@ -185,6 +182,15 @@ public class AgentLoop {
         }
     }
 
+
+
+    // ★ 新增方法
+    private String truncateToolResult(String content, int maxLen) {
+        if (content == null) return "";
+        if (content.length() <= maxLen) return content;
+        log.warn(">>> 工具结果超长截断: {} -> {}", content.length(), maxLen);
+        return content.substring(0, maxLen) + "\n...(结果过长已截断)";
+    }
     private void replaceMessages(List<Message> target, List<Message> source) {
         target.clear();
         target.addAll(source);

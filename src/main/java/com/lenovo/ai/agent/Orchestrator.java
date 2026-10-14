@@ -1,4 +1,4 @@
-package com.lenovo.ai.agent.orchestrate;
+package com.lenovo.ai.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -9,6 +9,7 @@ import com.lenovo.ai.agent.core.Agent;
 import com.lenovo.ai.agent.core.AgentRegistry;
 import com.lenovo.ai.agent.loop.AgentContext;
 import com.lenovo.ai.llm.Message;
+import com.lenovo.ai.memory.util.TextUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -32,7 +33,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class Orchestrator {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+//    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private final ObjectMapper objectMapper;
     private static final int MAX_SUBTASKS = 5;
 
     private final AgentRegistry registry;
@@ -119,9 +121,11 @@ public class Orchestrator {
             log.warn(">>> Planner 输出为空");
             return List.of();
         }
-        json = stripCodeFence(json);
+        // 原：json = stripCodeFence(json);
+        json = TextUtils.stripCodeFence(json);
         try {
-            List<Map<String, Object>> raw = MAPPER.readValue(json,
+            // 原：List<Map<String, Object>> raw = MAPPER.readValue(json, ...);
+            List<Map<String, Object>> raw = objectMapper.readValue(json,
                     new TypeReference<List<Map<String, Object>>>() {});
             List<AgentTask> tasks = new ArrayList<>();
             for (Map<String, Object> m : raw) {
@@ -191,23 +195,6 @@ public class Orchestrator {
             }
         }
         return "";
-    }
-
-    private String stripCodeFence(String s) {
-        if (s == null) return "";
-        String t = s.trim();
-        if (t.startsWith("```")) {
-            t = t.replaceFirst("^```[a-zA-Z]*\\s*", "");
-            int idx = t.lastIndexOf("```");
-            if (idx >= 0) t = t.substring(0, idx);
-            t = t.trim();
-        }
-        int start = t.indexOf('[');
-        int end = t.lastIndexOf(']');
-        if (start >= 0 && end > start) {
-            t = t.substring(start, end + 1);
-        }
-        return t;
     }
 
     private String preview(String s) {

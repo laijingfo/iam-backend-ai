@@ -25,27 +25,21 @@ public class ToolRegistry {
     public AiTool get(String name) { return tools.get(name); }
 
     /**
-     * 给 LLM 看的工具描述列表（仅按角色过滤）。
-     * 保留此方法以兼容旧调用，内部委托给带 agentToolNames 的重载。
-     */
-    public List<ToolSpec> availableTools(AiToolContext ctx) {
-        return availableTools(ctx, null);
-    }
-
-    /**
-     * 给 LLM 看的工具描述列表（按角色 + Agent 白名单双重过滤）。
-     *
-     * @param ctx            工具上下文（含用户角色）
-     * @param agentToolNames Agent 声明的工具白名单：
-     *                       - null 或空列表：不限制（等价于全部）
-     *                       - 含 "*"：全部工具
-     *                       - 其他：仅列出的工具名
-     * @return 过滤后的工具描述列表
+     * 工具列表过滤。
+     * <p><b>语义约定（重要）</b>：</p>
+     * <ul>
+     *   <li>{@code null}     → 全部工具（兼容旧调用）</li>
+     *   <li>{@code ["*"]}    → 全部工具</li>
+     *   <li>{@code []}（空） → <b>不返回任何工具</b>（Planner/Synthesizer 场景）</li>
+     *   <li>其他              → 白名单</li>
+     * </ul>
      */
     public List<ToolSpec> availableTools(AiToolContext ctx, List<String> agentToolNames) {
-        boolean allowAll = agentToolNames == null
-                || agentToolNames.isEmpty()
-                || agentToolNames.contains("*");
+        // ★ 空列表 = 无工具（修复语义）
+        if (agentToolNames != null && agentToolNames.isEmpty()) {
+            return List.of();
+        }
+        boolean allowAll = agentToolNames == null || agentToolNames.contains("*");
         return tools.values().stream()
                 .filter(t -> isAllowed(t, ctx))
                 .filter(t -> allowAll || agentToolNames.contains(t.name()))
@@ -53,7 +47,26 @@ public class ToolRegistry {
                 .toList();
     }
 
-    /** 执行前二次校验，防止 LLM 幻觉调用未授权工具（仅按角色） */
+    /** 兼容旧调用 */
+    public List<ToolSpec> availableTools(AiToolContext ctx) {
+        return availableTools(ctx, null);
+    }
+
+    /**
+     * 执行前双重校验：角色 + Agent 白名单。
+     */
+    public boolean isAllowed(String name, AiToolContext ctx, List<String> agentToolNames) {
+        AiTool t = tools.get(name);
+        if (t == null) return false;
+        if (!isAllowed(t, ctx)) return false;
+        // ★ Agent 白名单校验
+        if (agentToolNames == null || agentToolNames.contains("*")) return true;
+        if (agentToolNames.isEmpty()) return false;
+        return agentToolNames.contains(name);
+    }
+
+    /** 兼容旧调用（仅角色校验，不推荐） */
+    @Deprecated
     public boolean isAllowed(String name, AiToolContext ctx) {
         AiTool t = tools.get(name);
         return t != null && isAllowed(t, ctx);

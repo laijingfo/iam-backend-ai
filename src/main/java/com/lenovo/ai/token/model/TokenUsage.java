@@ -48,7 +48,7 @@ public record TokenUsage(
                 resp.inputTokens(),
                 resp.outputTokens(),
                 resp.totalTokens(),
-                0
+                resp.cachedTokens()    // ★ 使用真实值
         );
     }
 }

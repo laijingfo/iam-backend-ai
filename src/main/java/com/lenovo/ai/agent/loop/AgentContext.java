@@ -79,12 +79,21 @@ public class AgentContext {
 
     public AgentContext fork(String instruction) {
         List<Message> sub = new ArrayList<>();
+
+        // ★ 继承父 ctx 的 system 消息（保留全局约束）
+        for (Message m : this.messages) {
+            if (m.role() == MessageRole.SYSTEM) {
+                sub.add(m);
+            }
+        }
+
         sub.add(Message.user(instruction));
+
         AgentContext child = new AgentContext(sub, this.toolContext, this.emitter,
                 this.sessionId, this.assistantMessageId, this.runId, this.memoryId);
         child.setBlackboard(this.blackboard);
         child.setStreamToUser(this.streamToUser);
-        child.setModelName(this.modelName);       // ★ 继承模型
+        child.setModelName(this.modelName);
         return child;
     }
 

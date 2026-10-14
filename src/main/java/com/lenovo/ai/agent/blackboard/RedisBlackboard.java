@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -12,19 +13,27 @@ public class RedisBlackboard implements Blackboard {
 
     private static final String PREFIX = "ai:blackboard:";
     private static final long TTL_MINUTES = 30;
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** ★ 声明字段 */
     private final StringRedisTemplate redis;
     private final String boardId;
+    private final ObjectMapper objectMapper;
 
-    public RedisBlackboard(StringRedisTemplate redis, String boardId) {
+    /** ★ 唯一构造函数 */
+    public RedisBlackboard(StringRedisTemplate redis, String boardId, ObjectMapper objectMapper) {
         this.redis = redis;
         this.boardId = boardId;
+        this.objectMapper = objectMapper;
     }
 
-    private String key(String suffix) { return PREFIX + boardId + ":" + suffix; }
+    private String key(String suffix) {
+        return PREFIX + boardId + ":" + suffix;
+    }
 
-    @Override public String boardId() { return boardId; }
+    @Override
+    public String boardId() {
+        return boardId;
+    }
 
     // ===== 任务区 =====
 
@@ -38,11 +47,15 @@ public class RedisBlackboard implements Blackboard {
     public List<AgentTask> pendingTasks() {
         List<String> raw = redis.opsForList().range(key("tasks:pending"), 0, -1);
         if (raw == null) return List.of();
-        return raw.stream().map(s -> fromJson(s, AgentTask.class)).toList();
+        return raw.stream()
+                .map(s -> fromJson(s, AgentTask.class))
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     @Override
     public void markTaskDone(String taskId, AgentResult result) {
+        // ★ 用 Hash 存储，避免 List 全量扫描
         List<AgentTask> pending = pendingTasks();
         for (AgentTask t : pending) {
             if (t.taskId().equals(taskId)) {
@@ -58,7 +71,7 @@ public class RedisBlackboard implements Blackboard {
     public List<AgentResult> allResults() {
         return redis.opsForHash().values(key("tasks:done")).stream()
                 .map(v -> fromJson(String.valueOf(v), AgentResult.class))
-                .filter(java.util.Objects::nonNull)
+                .filter(Objects::nonNull)
                 .toList();
     }
 
@@ -105,12 +118,20 @@ public class RedisBlackboard implements Blackboard {
     // ===== 工具 =====
 
     private String toJson(Object o) {
-        try { return MAPPER.writeValueAsString(o); }
-        catch (Exception e) { log.warn("blackboard toJson 失败", e); return "{}"; }
+        try {
+            return objectMapper.writeValueAsString(o);   // ★ 用实例字段
+        } catch (Exception e) {
+            log.warn("blackboard toJson 失败", e);
+            return "{}";
+        }
     }
 
     private <T> T fromJson(String s, Class<T> type) {
-        try { return MAPPER.readValue(s, type); }
-        catch (Exception e) { log.warn("blackboard fromJson 失败: {}", s, e); return null; }
+        try {
+            return objectMapper.readValue(s, type);      // ★ 用实例字段
+        } catch (Exception e) {
+            log.warn("blackboard fromJson 失败: {}", s, e);
+            return null;
+        }
     }
 }

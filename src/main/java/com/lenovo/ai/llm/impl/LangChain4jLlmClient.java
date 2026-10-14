@@ -40,14 +40,17 @@ public class LangChain4jLlmClient implements LlmClient {
     private static final int CHAT_SIMPLE_MAX_RETRIES = 3;
     private static final long CHAT_SIMPLE_RETRY_BACKOFF_MS = 500;
     private static final int LOG_RESP_PREVIEW_LEN = 500;
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
+//    private static final ObjectMapper MAPPER = new ObjectMapper();
     private final StreamingChatModel streamingModel;
     private final ChatModel chatModel;
+    private final ObjectMapper objectMapper;   // ★ 新增
 
-    public LangChain4jLlmClient(StreamingChatModel streamingModel, ChatModel chatModel) {
+    public LangChain4jLlmClient(StreamingChatModel streamingModel,
+                                ChatModel chatModel,
+                                ObjectMapper objectMapper) {
         this.streamingModel = streamingModel;
         this.chatModel = chatModel;
+        this.objectMapper = objectMapper;
     }
 
     // =================================================================
@@ -70,10 +73,9 @@ public class LangChain4jLlmClient implements LlmClient {
         List<ToolExecutionRequest> toolRequests = new ArrayList<>();
 
         // ★ usage 累积容器（在回调里填，主线程读取）
-        final int[] usageHolder = new int[]{0, 0, 0};
+        final int[] usageHolder = new int[]{0, 0, 0, 0};
 
         streamingModel.chat(request, new StreamingChatResponseHandler() {
-
             @Override
             public void onPartialResponse(String partialResponse) {
                 if (partialResponse != null && !partialResponse.isEmpty()) {
@@ -86,32 +88,24 @@ public class LangChain4jLlmClient implements LlmClient {
             public void onCompleteResponse(ChatResponse completeResponse) {
                 try {
                     AiMessage aiMessage = completeResponse.aiMessage();
-                    String content = aiMessage.text();
-                    if (content != null && !content.isEmpty()) {
-                        fullContent.setLength(0);
-                        fullContent.append(content);
-                        emitter.send("done", Map.of("answer", content));
-                    }
                     if (aiMessage.hasToolExecutionRequests()) {
                         toolRequests.addAll(aiMessage.toolExecutionRequests());
-                        emitter.send("tool", Map.of("name", "tool_execution"));
                     }
 
-                    // ==================================================
-                    // ★★★ 新增：提取 token usage ★★★
-                    // ==================================================
+                    // ★ 提取 token usage
                     TokenUsage tu = completeResponse.tokenUsage();
                     if (tu != null) {
-                        usageHolder[0] = tu.inputTokenCount()  == null ? 0 : tu.inputTokenCount();
+                        usageHolder[0] = tu.inputTokenCount() == null ? 0 : tu.inputTokenCount();
                         usageHolder[1] = tu.outputTokenCount() == null ? 0 : tu.outputTokenCount();
-                        usageHolder[2] = tu.totalTokenCount()  == null ? 0 : tu.totalTokenCount();
+                        usageHolder[2] = tu.totalTokenCount() == null ? 0 : tu.totalTokenCount();
+
+                        // ★ 提取 cachedTokens（从原始响应的 prompt_tokens_details.cached_tokens）
+                        usageHolder[3] = extractCachedTokens(completeResponse);
                     }
 
-                    LlmResponse response = toLlmResponse(
+                    future.complete(toLlmResponse(
                             fullContent.toString(), toolRequests,
-                            usageHolder[0], usageHolder[1], usageHolder[2]);
-                    future.complete(response);
-
+                            usageHolder[0], usageHolder[1], usageHolder[2], usageHolder[3]));
                 } catch (Exception e) {
                     future.completeExceptionally(e);
                 }
@@ -120,8 +114,10 @@ public class LangChain4jLlmClient implements LlmClient {
             @Override
             public void onError(Throwable error) {
                 log.error("StreamingChatResponseHandler onError", error);
-                emitter.send("error", Map.of("message", error.getMessage()));
-                future.completeExceptionally(error);
+                // ★ 出错也返回已产生的 usage
+                future.complete(toLlmResponse(
+                        fullContent.toString(), toolRequests,
+                        usageHolder[0], usageHolder[1], usageHolder[2], usageHolder[3]));
             }
         });
 
@@ -133,7 +129,42 @@ public class LangChain4jLlmClient implements LlmClient {
             return LlmResponse.of("", List.of());
         }
     }
+    /** 从 LangChain4j 响应中提取 cachedTokens */
+    private int extractCachedTokens(ChatResponse response) {
+        try {
+            // LangChain4j 的 TokenUsage 不直接暴露 cachedTokens
+            // 尝试从 metadata 或原始响应中提取
+            Object metadata = response.metadata();
+            if (metadata instanceof Map<?, ?> map) {
+                Object details = map.get("prompt_tokens_details");
+                if (details instanceof Map<?, ?> detailsMap) {
+                    Object cached = detailsMap.get("cached_tokens");
+                    if (cached instanceof Number n) {
+                        return n.intValue();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("提取 cachedTokens 失败", e);
+        }
+        return 0;
+    }
 
+    private LlmResponse toLlmResponse(String content,
+                                      List<ToolExecutionRequest> requests,
+                                      int inputTokens, int outputTokens, int totalTokens,
+                                      int cachedTokens) {          // ★ 新增参数
+        if (requests.isEmpty()) {
+            return LlmResponse.of(content, List.of(),
+                    inputTokens, outputTokens, totalTokens, cachedTokens);   // ★ 传 5 个
+        }
+        List<LlmResponse.ToolCall> toolCalls = requests.stream().map(req -> {
+            Map<String, Object> args = parseJson(req.arguments());
+            return new LlmResponse.ToolCall(req.id(), req.name(), args);
+        }).toList();
+        return LlmResponse.of(content, toolCalls,
+                inputTokens, outputTokens, totalTokens, cachedTokens);       // ★ 传 5 个
+    }
     // =================================================================
     //  chatSimple（逻辑完全不变）
     // =================================================================
@@ -300,7 +331,8 @@ public class LangChain4jLlmClient implements LlmClient {
     private String toJson(Map<String, Object> map) {
         if (map == null || map.isEmpty()) return "{}";
         try {
-            return MAPPER.writeValueAsString(map);
+            // 原：return MAPPER.writeValueAsString(map);
+            return objectMapper.writeValueAsString(map);
         } catch (Exception e) {
             log.warn("toJson failed", e);
             return "{}";
@@ -310,7 +342,8 @@ public class LangChain4jLlmClient implements LlmClient {
     private Map<String, Object> parseJson(String json) {
         if (json == null || json.isBlank()) return Map.of();
         try {
-            return MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+            // 原：return MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
             log.warn("parseJson failed: {}", json, e);
             return Map.of();

@@ -1,6 +1,7 @@
 package com.lenovo.ai.token.context;
 
 import com.lenovo.ai.llm.Message;
+import com.lenovo.ai.llm.enums.MessageRole;
 import com.lenovo.ai.token.config.TokenProperties;
 import com.lenovo.ai.token.estimator.TokenEstimator;
 import lombok.RequiredArgsConstructor;
@@ -59,7 +60,8 @@ public class ContextTrimmer {
         }
 
         // ⑤ 若首条是 assistant（配对断裂），丢弃它
-        if (!kept.isEmpty() && isAssistant(kept.peekFirst())) {
+        // 原：if (!kept.isEmpty() && isAssistant(kept.peekFirst())) {
+        if (!kept.isEmpty() && kept.peekFirst().role() == MessageRole.ASSISTANT) {
             Message dropped = kept.pollFirst();
             keptTokens -= estimator.estimate(dropped.content());
             log.debug("[context-trim] 丢弃配对断裂的 assistant 消息");
@@ -73,8 +75,8 @@ public class ContextTrimmer {
         return result;
     }
 
-    private static boolean isAssistant(Message m) {
-        // 按项目实际 Message 类型判断，这里示意
-        return m.role() != null && "assistant".equalsIgnoreCase(m.role().name());
-    }
+//    private static boolean isAssistant(Message m) {
+//        // 按项目实际 Message 类型判断，这里示意
+//        return m.role() != null && "assistant".equalsIgnoreCase(m.role().name());
+//    }
 }

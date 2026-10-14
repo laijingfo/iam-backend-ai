@@ -1,5 +1,6 @@
 package com.lenovo.ai.config;
 
+import com.lenovo.ai.llm.cache.CachedTokenListener;
 import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -17,6 +18,7 @@ import org.springframework.context.annotation.Configuration;
 import javax.net.ssl.SSLContext;
 import java.security.Security;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -77,9 +79,10 @@ public class LangChain4jConfig {
 
     /**
      * 非流式 ChatModel：用于 MemoryExtractor 等需要完整响应的场景。
+     * <p>挂载 CachedTokenListener 以捕获 cachedTokens（LangChain4j 默认不暴露）。</p>
      */
     @Bean
-    public ChatModel chatModel() {
+    public ChatModel chatModel(CachedTokenListener cachedTokenListener) {
         OpenAiChatRequestParameters requestParameters = OpenAiChatRequestParameters.builder()
                 .modelName(chatModelName)
                 .temperature(chatTemperature)
@@ -92,21 +95,24 @@ public class LangChain4jConfig {
                 .timeout(Duration.ofSeconds(timeoutSeconds))
                 .maxRetries(maxRetries)
                 .logRequests(logRequests).logResponses(logResponses)
+                .listeners(List.of(cachedTokenListener))    // ★ 挂监听器
                 .build();
     }
 
     /**
      * 流式 StreamingChatModel：用于 AgentLoop 的实时流式输出。
-     * 注意：流式模型不支持 maxRetries（与 yml 注释一致）。
+     * <p>注意：流式模型不支持 maxRetries（与 yml 注释一致）。</p>
+     * <p>挂载 CachedTokenListener 以捕获 cachedTokens。</p>
      */
     @Bean
-    public StreamingChatModel streamingChatModel() {
+    public StreamingChatModel streamingChatModel(CachedTokenListener cachedTokenListener) {
         return OpenAiStreamingChatModel.builder()
                 .httpClientBuilder(newHttpClientBuilder())
                 .baseUrl(baseUrl).apiKey(apiKey).modelName(streamingChatModelName)
                 .temperature(temperature)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
                 .logRequests(logRequests).logResponses(logResponses)
+                .listeners(List.of(cachedTokenListener))    // ★ 挂监听器
                 .build();
     }
 

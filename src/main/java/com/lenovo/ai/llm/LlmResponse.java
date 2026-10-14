@@ -3,20 +3,13 @@ package com.lenovo.ai.llm;
 import java.util.List;
 import java.util.Map;
 
-/**
- * LLM 响应
- * - content      : 文本内容
- * - toolCalls    : 工具调用列表（可能为空）
- * - inputTokens  : 输入 token 数（LangChain4j tokenUsage）
- * - outputTokens : 输出 token 数
- * - totalTokens  : 总 token 数
- */
 public record LlmResponse(
         String content,
         List<ToolCall> toolCalls,
         int inputTokens,
         int outputTokens,
-        int totalTokens
+        int totalTokens,
+        int cachedTokens      // ★ 新增
 ) {
     public boolean hasToolCalls() {
         return toolCalls != null && !toolCalls.isEmpty();
@@ -24,17 +17,22 @@ public record LlmResponse(
 
     /** 兼容旧调用：无 usage 时填 0 */
     public static LlmResponse of(String content, List<ToolCall> toolCalls) {
-        return new LlmResponse(content, toolCalls, 0, 0, 0);
+        return new LlmResponse(content, toolCalls, 0, 0, 0, 0);
     }
 
+    /** 兼容旧调用：4 参数版本 */
     public static LlmResponse of(String content, List<ToolCall> toolCalls,
                                  int inputTokens, int outputTokens, int totalTokens) {
-        return new LlmResponse(content, toolCalls, inputTokens, outputTokens, totalTokens);
+        return new LlmResponse(content, toolCalls, inputTokens, outputTokens, totalTokens, 0);
     }
 
-    /**
-     * ★ 唯一结构性改动：args 从 String → Map
-     * 这样 AgentLoop 里的 tool.execute(call.args(), ...) 和 Message.ToolCallRef(...) 都能编译通过
-     */
+    /** 完整版本 */
+    public static LlmResponse of(String content, List<ToolCall> toolCalls,
+                                 int inputTokens, int outputTokens, int totalTokens,
+                                 int cachedTokens) {
+        return new LlmResponse(content, toolCalls, inputTokens, outputTokens,
+                totalTokens, cachedTokens);
+    }
+
     public record ToolCall(String id, String name, Map<String, Object> args) {}
 }

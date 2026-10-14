@@ -19,8 +19,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class TokenQueryService {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
+//    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private final ObjectMapper objectMapper;
     private final StringRedisTemplate redis;
 
     /** 今日汇总 */
@@ -54,7 +54,8 @@ public class TokenQueryService {
         List<TokenUsageRecord> result = new ArrayList<>(raw.size());
         for (String s : raw) {
             try {
-                result.add(MAPPER.readValue(s, TokenUsageRecord.class));
+                // 原：result.add(MAPPER.readValue(s, TokenUsageRecord.class));
+                result.add(objectMapper.readValue(s, TokenUsageRecord.class));
             } catch (Exception e) {
                 log.warn("[token-query] 解析失败: {}", e.getMessage());
             }

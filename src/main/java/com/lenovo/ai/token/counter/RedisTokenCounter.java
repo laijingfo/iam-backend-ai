@@ -25,8 +25,8 @@ public class RedisTokenCounter implements TokenCounter {
     private static final long DAY_TTL_DAYS = 90L;
     private static final long MONTH_TTL_DAYS = 400L;
     private static final int MAX_RECORDS_PER_DAY = 100;
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
+//    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private final ObjectMapper objectMapper;
     private static final byte[] FIELD_COST_B =
             TokenRedisKeys.FIELD_COST.getBytes(StandardCharsets.UTF_8);
 
@@ -55,7 +55,7 @@ public class RedisTokenCounter implements TokenCounter {
                     .costCny(cost)
                     .timestamp(System.currentTimeMillis())
                     .build();
-            String recJson = MAPPER.writeValueAsString(rec);
+            String recJson = objectMapper.writeValueAsString(rec);
 
             String dayKey   = TokenRedisKeys.usageDay(userId);
             String monthKey = TokenRedisKeys.usageMonth(userId);

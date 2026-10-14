@@ -3,6 +3,7 @@ package com.lenovo.ai.memory.context;
 import com.lenovo.ai.llm.LlmClient;
 import com.lenovo.ai.llm.Message;
 import com.lenovo.ai.memory.util.TextUtils;
+import com.lenovo.ai.util.DigestUtils;
 import com.lenovo.util.RedisUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,7 +12,8 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.List;
 import java.util.stream.Collectors;
-
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 /**
  * 对话摘要服务：把一段历史消息压缩成简洁摘要。
  *
@@ -41,7 +43,8 @@ public class SummaryService {
                 .map(m -> m.role() + ": " + m.content())
                 .collect(Collectors.joining("\n"));
 
-        String cacheKey = CACHE_PREFIX + Integer.toHexString(raw.hashCode());
+        // 原：String cacheKey = CACHE_PREFIX + Integer.toHexString(raw.hashCode());
+        String cacheKey = CACHE_PREFIX + DigestUtils.md5(raw);
 
         try {
             Object cached = redisUtils.get(cacheKey);
@@ -88,4 +91,5 @@ public class SummaryService {
 
         return summary;
     }
+
 }

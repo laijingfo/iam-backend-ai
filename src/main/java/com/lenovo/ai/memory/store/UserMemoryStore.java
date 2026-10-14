@@ -3,6 +3,7 @@ package com.lenovo.ai.memory.store;
 import com.lenovo.ai.memory.embedding.EmbeddingClient;
 import com.lenovo.ai.memory.model.MemoryHit;
 import com.lenovo.ai.memory.model.MemoryItem;
+import com.lenovo.ai.util.DigestUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -25,7 +26,8 @@ import java.util.concurrent.TimeUnit;
 public class UserMemoryStore {
 
     private static final String PREFIX = "ai:memory:";
-    private static final long   EXACT_TTL_DAYS = 30;
+    // 将 EXACT_TTL_DAYS 从 30 改为 90+，与 RedisMemoryStore 的 TTL 对齐
+    private static final long EXACT_TTL_DAYS = 100;
 
     /** 语义去重阈值：高于此分视为同一条 */
     private static final double SEMANTIC_DUP_SCORE = 0.95;
@@ -42,38 +44,51 @@ public class UserMemoryStore {
     public void save(String userId, String type, String content, double importance) {
         if (content == null || content.isBlank()) return;
 
-        String id = md5(userId + "|" + type + "|" + content.trim());
-
-        // ① 精确去重
+//        String id = md5(userId + "|" + type + "|" + content.trim());
+        String id = DigestUtils.md5(userId + "|" + type + "|" + content.trim());
         String exactKey = PREFIX + "exact:" + id;
-        Boolean first = redis.opsForValue()
-                .setIfAbsent(exactKey, "1", EXACT_TTL_DAYS, TimeUnit.DAYS);
-        if (Boolean.FALSE.equals(first)) {
-            log.info("[memory-save] 精确重复，跳过: userId={}, type={}, content={}",
-                    userId, type, content);
+
+        // ① 先检查是否已存在
+        Boolean exists = redis.hasKey(exactKey);
+        if (Boolean.TRUE.equals(exists)) {
+            log.info("[memory-save] 精确重复，跳过: userId={}, type={}", userId, type);
             return;
         }
 
-        List<Double> emb = embeddingClient.embed(content);
+        // ② 计算 embedding（失败则直接返回，不写 exactKey）
+        List<Double> emb;
+        try {
+            emb = embeddingClient.embed(content);
+        } catch (Exception e) {
+            log.warn("[memory-save] embedding 失败，跳过: content={}", content, e);
+            return;
+        }
         if (emb == null || emb.isEmpty()) {
             log.warn("[memory-save] embedding 为空，跳过: content={}", content);
             return;
         }
 
-        // ② 语义去重
+        // ③ 语义去重
         List<MemoryHit> hits = memoryStore.searchHitsByUser(userId, emb, 1);
         if (!hits.isEmpty() && hits.get(0).score() >= SEMANTIC_DUP_SCORE) {
             MemoryHit hit = hits.get(0);
-            memoryStore.save(hit.item().withHit());   // ★ 命中累加直接 save
-            log.info("[memory-save] 语义重复(score={})，累加命中: userId={}, content={}",
-                    hit.score(), userId, content);
+            memoryStore.save(hit.item().withHit());
+            log.info("[memory-save] 语义重复(score={}), 累加命中", hit.score());
             return;
         }
 
-        // ③ 真入库
+        // ④ 真正入库
         MemoryItem item = MemoryItem.of(userId, type, content.trim(), emb, importance);
         memoryStore.save(item);
-        log.info("[memory-save] userId={}, type={}, content={}", userId, type, content);
+
+        // ⑤ 入库成功后才写 exactKey（setIfAbsent 兜底并发）
+        Boolean first = redis.opsForValue()
+                .setIfAbsent(exactKey, "1", EXACT_TTL_DAYS, TimeUnit.DAYS);
+        if (Boolean.FALSE.equals(first)) {
+            log.debug("[memory-save] 并发重复，已忽略 exactKey: id={}", id);
+        }
+
+        log.info("[memory-save] 保存成功: userId={}, type={}, content={}", userId, type, content);
     }
 
     // =========================================================
@@ -101,16 +116,4 @@ public class UserMemoryStore {
         return result;
     }
 
-    // =========================================================
-    private static String md5(String s) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] d = md.digest(s.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            for (byte b : d) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (Exception e) {
-            throw new IllegalStateException("md5 failed", e);
-        }
-    }
 }
