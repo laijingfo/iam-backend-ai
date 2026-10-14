@@ -2,6 +2,7 @@ package com.lenovo.ai.util;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.HexFormat;
 
 /**
  * 摘要工具。
@@ -23,9 +24,7 @@ public final class DigestUtils {
         try {
             MessageDigest md = MessageDigest.getInstance(algorithm);
             byte[] d = md.digest(s.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(d.length * 2);
-            for (byte b : d) sb.append(String.format("%02x", b));
-            return sb.toString();
+            return HexFormat.of().formatHex(d);
         } catch (Exception e) {
             throw new IllegalStateException(algorithm + " 计算失败", e);
         }

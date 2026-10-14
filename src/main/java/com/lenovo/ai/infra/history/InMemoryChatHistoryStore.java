@@ -4,6 +4,8 @@ import com.lenovo.ai.llm.Message;
 import com.lenovo.ai.llm.enums.MessageRole;
 import com.lenovo.dto.AiChatPolicyResponse;
 import com.lenovo.dto.AiChatSessionResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -19,7 +21,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>
  * TODO 待 PG 的 AI 聊天相关表就绪后替换为数据库实现。
  */
+@Slf4j
 @Component
+//@ConditionalOnMissingBean(ChatHistoryStore.class)
 public class InMemoryChatHistoryStore implements ChatHistoryStore {
 
     private record StoredMessage(long id, String sessionId, String userId,
@@ -54,13 +58,30 @@ public class InMemoryChatHistoryStore implements ChatHistoryStore {
     public void append(String sessionId, String userId, long messageId,
                        String role, String content, String extra) {
         LocalDateTime now = LocalDateTime.now();
-        sessions.compute(sessionId, (k, old) -> new SessionMeta(
-                old != null ? old.owner() : userId,
-                old != null && old.title() != null && !old.title().isBlank()
-                        ? old.title() : firstLine(content),
-                old != null ? old.createdAt() : now,
-                now));
+        sessions.compute(sessionId, (k, old) -> {
+            String owner;
+            if (old != null && old.owner() != null && !old.owner().isBlank()) {
+                owner = old.owner();
+            } else {
+                owner = (userId == null || userId.isBlank()) ? "" : userId;
+            }
+            String title = old != null && old.title() != null && !old.title().isBlank()
+                    ? old.title() : firstLine(content);
+            LocalDateTime created = old != null ? old.createdAt() : now;
+            return new SessionMeta(owner, title, created, now);
+        });
         messages.put(messageId, new StoredMessage(messageId, sessionId, userId, role, content, extra));
+    }
+
+    @Override
+    public void appendAssistant(long assistantMessageId, String sessionId, String content) {
+        SessionMeta meta = sessions.get(sessionId);
+        if (meta == null) {
+            log.warn("appendAssistant 时 session 不存在: sessionId={}, assistantMessageId={}",
+                    sessionId, assistantMessageId);
+            return;   // ★ 不写，避免创建空 owner session
+        }
+        append(sessionId, meta.owner(), assistantMessageId, "ASSISTANT", content, null);
     }
 
     @Override
@@ -113,12 +134,6 @@ public class InMemoryChatHistoryStore implements ChatHistoryStore {
     @Override
     public void appendUser(long userMessageId, String sessionId, String userId, String message) {
         append(sessionId, userId, userMessageId, "USER", message, null);
-    }
-
-    @Override
-    public void appendAssistant(long assistantMessageId, String sessionId, String content) {
-        SessionMeta meta = sessions.get(sessionId);
-        append(sessionId, meta == null ? "" : meta.owner(), assistantMessageId, "ASSISTANT", content, null);
     }
 
     private Message toMessage(StoredMessage m) {

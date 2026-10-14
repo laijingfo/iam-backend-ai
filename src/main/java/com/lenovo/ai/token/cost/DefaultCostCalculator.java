@@ -23,17 +23,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DefaultCostCalculator implements CostCalculator {
 
     private static final double CACHED_DISCOUNT = 0.1;
-    private final TokenProperties properties;
 
-    /** 缓存解析后的价格，避免每次查 Map */
-    private final Map<String, ModelPrice> cache = new ConcurrentHashMap<>();
+    private final TokenProperties properties;
 
     @Override
     public double calculate(String modelName, TokenUsage usage) {
         if (usage == null || usage.totalTokens() <= 0) return 0.0;
 
         ModelPrice price = resolve(modelName);
-        int normalInput = usage.inputTokens() - usage.cachedTokens();
+        int normalInput = Math.max(0, usage.inputTokens() - usage.cachedTokens());
         int cachedInput = Math.max(usage.cachedTokens(), 0);
 
         double inputCost = (normalInput / 1000.0) * price.input()
@@ -48,11 +46,9 @@ public class DefaultCostCalculator implements CostCalculator {
     }
 
     private ModelPrice resolve(String modelName) {
-        return cache.computeIfAbsent(modelName, name -> {
-            TokenProperties.ModelPrice p = properties.getCost().get(name);
-            if (p != null) return new ModelPrice(p.getInput(), p.getOutput());
-            log.warn("[cost] 模型 {} 未配置价格，使用默认值", name);
-            return ModelPrice.DEFAULT;
-        });
+        TokenProperties.ModelPrice p = properties.getCost().get(modelName);
+        if (p != null) return new ModelPrice(p.getInput(), p.getOutput());
+        log.warn("[cost] 模型 {} 未配置价格，使用默认值", modelName);
+        return ModelPrice.DEFAULT;
     }
 }

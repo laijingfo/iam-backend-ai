@@ -14,6 +14,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -25,14 +26,14 @@ public class RedisTokenCounter implements TokenCounter {
     private static final long DAY_TTL_DAYS = 90L;
     private static final long MONTH_TTL_DAYS = 400L;
     private static final int MAX_RECORDS_PER_DAY = 100;
-//    private static final ObjectMapper MAPPER = new ObjectMapper();
-    private final ObjectMapper objectMapper;
-    private static final byte[] FIELD_COST_B =
-            TokenRedisKeys.FIELD_COST.getBytes(StandardCharsets.UTF_8);
 
+    private final ObjectMapper objectMapper;
     private final StringRedisTemplate redis;
     private final CostCalculator costCalculator;
     private final TokenProperties properties;
+
+    private static final byte[] FIELD_COST_B =
+            TokenRedisKeys.FIELD_COST.getBytes(StandardCharsets.UTF_8);
 
     @Override
     public void record(String userId, String sessionId, String runId,
@@ -41,7 +42,6 @@ public class RedisTokenCounter implements TokenCounter {
 
         try {
             double cost = costCalculator.calculate(modelName, usage);
-            // 元 -> 微元，四舍五入（原 (long) 强转是截断，会累积偏差）
             long costMicro = Math.round(cost * TokenRedisKeys.MICRO_CNY);
 
             TokenUsageRecord rec = TokenUsageRecord.builder()
@@ -64,7 +64,7 @@ public class RedisTokenCounter implements TokenCounter {
             String costMon  = TokenRedisKeys.costMonth(userId);
             String recKey   = TokenRedisKeys.recordsDay(userId);
 
-            redis.executePipelined((RedisCallback<Object>) connection -> {
+            List<Object> results = redis.executePipelined((RedisCallback<Object>) connection -> {
                 byte[] dayKeyB   = dayKey.getBytes(StandardCharsets.UTF_8);
                 byte[] monthKeyB = monthKey.getBytes(StandardCharsets.UTF_8);
                 byte[] modelKeyB = modelKey.getBytes(StandardCharsets.UTF_8);
@@ -72,22 +72,18 @@ public class RedisTokenCounter implements TokenCounter {
                 byte[] costMonB  = costMon.getBytes(StandardCharsets.UTF_8);
                 byte[] recKeyB   = recKey.getBytes(StandardCharsets.UTF_8);
 
-                // 日 / 月 用量
                 incrHash(connection, dayKeyB, usage);
                 incrHash(connection, monthKeyB, usage);
 
-                // 日 / 月 成本（hash field = cny，单位微元）
                 connection.hIncrBy(costDayB, FIELD_COST_B, costMicro);
                 connection.hIncrBy(costMonB, FIELD_COST_B, costMicro);
 
-                // 模型维度
-                connection.hIncrBy(modelKeyB, modelName.getBytes(StandardCharsets.UTF_8), usage.totalTokens());
+                connection.hIncrBy(modelKeyB, modelName.getBytes(StandardCharsets.UTF_8),
+                        usage.totalTokens());
 
-                // 明细
                 connection.lPush(recKeyB, recJson.getBytes(StandardCharsets.UTF_8));
                 connection.lTrim(recKeyB, 0, MAX_RECORDS_PER_DAY - 1);
 
-                // TTL
                 connection.expire(dayKeyB, TimeUnit.DAYS.toSeconds(DAY_TTL_DAYS));
                 connection.expire(monthKeyB, TimeUnit.DAYS.toSeconds(MONTH_TTL_DAYS));
                 connection.expire(modelKeyB, TimeUnit.DAYS.toSeconds(DAY_TTL_DAYS));
@@ -96,6 +92,16 @@ public class RedisTokenCounter implements TokenCounter {
                 connection.expire(recKeyB, TimeUnit.DAYS.toSeconds(DAY_TTL_DAYS));
                 return null;
             });
+
+            // ★ 检查 pipeline 里是否混入异常
+            if (results != null) {
+                for (int i = 0; i < results.size(); i++) {
+                    Object r = results.get(i);
+                    if (r instanceof Throwable t) {
+                        log.error("[token-record] pipeline 第 {} 条命令失败: {}", i, t.getMessage());
+                    }
+                }
+            }
 
             log.info("[token-record] userId={}, model={}, in={}, out={}, cached={}, cost=¥{}",
                     userId, modelName, usage.inputTokens(), usage.outputTokens(),

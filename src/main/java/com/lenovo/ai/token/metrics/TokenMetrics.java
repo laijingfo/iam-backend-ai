@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -30,9 +31,8 @@ public class TokenMetrics {
     }
 
     private Counter counter(String name, String... tags) {
-        StringBuilder sb = new StringBuilder(name);
-        for (int i = 0; i < tags.length; i += 2) sb.append('|').append(tags[i]).append('=').append(tags[i + 1]);
-        return cache.computeIfAbsent(sb.toString(), k -> {
+        String key = name + ":" + Arrays.hashCode(tags);
+        return cache.computeIfAbsent(key, k -> {
             Counter.Builder b = Counter.builder(name);
             for (int i = 0; i < tags.length; i += 2) b.tag(tags[i], tags[i + 1]);
             return b.register(registry);

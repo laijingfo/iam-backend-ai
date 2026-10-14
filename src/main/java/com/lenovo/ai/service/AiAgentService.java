@@ -31,7 +31,6 @@ public class AiAgentService {
     private final AiAgentRunner runner;
     private final TokenQuotaService quotaService;
 
-    // ★ 合并后：只有 2 个 Map
     private final Map<String, RequestState> requestsById = new ConcurrentHashMap<>();
     private final Map<String, String> activeByMemory = new ConcurrentHashMap<>();
 
@@ -71,7 +70,9 @@ public class AiAgentService {
         String memoryId = userId + ":" + sessionId;
         String lockKey = "ai:chat:lock:" + memoryId;
         String lockToken = UUID.randomUUID().toString();
+        // ★ runId 服务端唯一，绝不使用客户端可伪造的值
         String runId = UUID.randomUUID().toString();
+        // ★ requestId 允许客户端指定（幂等 / 停止用），但不参与黑板 / AgentContext
         String requestId = (request.clientRequestId() != null && !request.clientRequestId().isBlank())
                 ? request.clientRequestId()
                 : UUID.randomUUID().toString();
@@ -108,7 +109,7 @@ public class AiAgentService {
             requestsById.put(requestId, state);
             activeByMemory.put(memoryId, requestId);
 
-            // 4. 加锁（★ TTL 改为 5 分钟）
+            // 4. 加锁
             boolean locked = redisLockHelper.tryLock(lockKey, lockToken, 300_000L);
             if (!locked) {
                 log.error(">>> 锁冲突: memoryId={}", memoryId);
@@ -120,7 +121,8 @@ public class AiAgentService {
                 emitter.complete();
                 return emitter;
             }
-            log.info(">>> 成功获取锁: memoryId={}, requestId={}", memoryId, requestId);
+            log.info(">>> 成功获取锁: memoryId={}, requestId={}, runId={}",
+                    memoryId, requestId, runId);
 
             // 5. 会话初始化
             boolean newSession = !history.exists(sessionId);
@@ -130,17 +132,18 @@ public class AiAgentService {
             long userMessageId = history.nextMessageId();
             long assistantMessageId = history.nextMessageId();
 
-            // 6. 生命周期回调（★ 用 addCloseCallback）
+            // 6. 生命周期回调
             emitter.addCloseCallback(() -> {
                 cleanup(requestId);
                 log.debug(">>> emitter close: requestId={}", requestId);
             });
 
-            // 7. 提交线程池
+            // 7. 提交线程池 ★ 传 runId 和 requestId 两个
             chatExecutor.execute(() -> runner.run(
                     request, context, userId, newSession, sessionId,
                     userMessageId, assistantMessageId, locale,
-                    memoryId, lockKey, lockToken, emitter, requestId));
+                    memoryId, lockKey, lockToken, emitter,
+                    runId, requestId));
 
             return emitter;
 
@@ -166,8 +169,8 @@ public class AiAgentService {
             return;
         }
 
-        log.info(">>> 停止会话: memoryId={}, requestId={}",
-                state.memoryId, clientRequestId);
+        log.info(">>> 停止会话: memoryId={}, requestId={}, runId={}",
+                state.memoryId, clientRequestId, state.runId);
 
         try {
             if (!state.emitter.isClosed()) {

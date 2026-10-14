@@ -35,16 +35,16 @@ public class SummaryService {
     }
 
     public String summarize(List<Message> messages, int maxWordSize) {
-        if (messages == null || messages.isEmpty()) {
-            return "";
-        }
+        if (messages == null || messages.isEmpty()) return "";
 
+        // ★ 用消息数量 + 内容 hash 的组合，避免每次 sublist 变化导致 key 全变
         String raw = messages.stream()
                 .map(m -> m.role() + ": " + m.content())
                 .collect(Collectors.joining("\n"));
 
-        // 原：String cacheKey = CACHE_PREFIX + Integer.toHexString(raw.hashCode());
-        String cacheKey = CACHE_PREFIX + DigestUtils.md5(raw);
+        // 只对前 N 条做 hash（前缀稳定）
+        int prefixLen = Math.min(raw.length(), 2000);
+        String cacheKey = CACHE_PREFIX + DigestUtils.md5(raw.substring(0, prefixLen));
 
         try {
             Object cached = redisUtils.get(cacheKey);

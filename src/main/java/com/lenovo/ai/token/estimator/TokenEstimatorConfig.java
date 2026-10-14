@@ -27,18 +27,21 @@ import org.springframework.context.annotation.Configuration;
 public class TokenEstimatorConfig {
 
     /**
-     * 默认：启发式估算
-     * 条件：容器中不存在其他 TokenEstimator 类型 Bean
+     * 默认：启发式估算。
+     * 条件：token.estimator.type 未配置 或 = heuristic
      */
     @Bean
-    @ConditionalOnMissingBean(TokenEstimator.class)
+    @ConditionalOnProperty(
+            name = "token.estimator.type",
+            havingValue = "heuristic",
+            matchIfMissing = true)
     public TokenEstimator heuristicTokenEstimator() {
         log.info("[token-estimator] 注册启发式估算器 HeuristicTokenEstimator");
         return new HeuristicTokenEstimator();
     }
 
     /**
-     * 可选：精确估算（jtokkit）
+     * 可选：精确估算（jtokkit）。
      * 条件：token.estimator.type = tiktoken
      */
     @Bean

@@ -42,9 +42,14 @@ public final class TextUtils {
     public static boolean looksLikeId(String s) {
         if (s == null) return false;
         String t = s.trim();
-        if (t.isEmpty() || t.length() > 64) return false;
-        return t.matches("(?i)^[0-9a-f]{8}(-[0-9a-f]{4}){0,4}([0-9a-f]{0,12})?$")
-                && t.replace("-", "").length() >= 8;
+        // 只认标准的 32 位 hex（无连字符）或 36 位 UUID（带连字符）
+        if (t.length() == 32) {
+            return t.matches("(?i)^[0-9a-f]{32}$");
+        }
+        if (t.length() == 36) {
+            return t.matches("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+        }
+        return false;
     }
 
     /**

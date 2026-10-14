@@ -38,7 +38,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
@@ -101,6 +100,9 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
 
     /** 内部字段：RediSearch 返回的 Redis key */
     private static final String FIELD_REDIS_KEY   = "__redisKey";
+
+    @Value("${langchain4j.memory.knn.score-is-distance:true}")
+    private boolean SCORE_IS_DISTANCE;
 
     /**
      * KNN 查询显式 RETURN 的字段列表。
@@ -244,25 +246,13 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         byte[] embeddingBytes = VectorUtils.toFloatBytes(item.embedding());
 
         try {
-//            withCommands(
-//                    cmd -> {
-//                        writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
-//                        cmd.expire(keyBytes, TTL_SECONDS);
-//                        return null;
-//                    },
-//                    cmd -> {
-//                        writeFields((k, v) -> cmd.hset(keyBytes, k, v), item, embeddingBytes);
-//                        cmd.expire(keyBytes, TTL_SECONDS);
-//                        return null;
-//                    }
-//            );
-            writeFields((k, v) -> hsetBoth(keyBytes, k, v), item, embeddingBytes);
+//            writeFields((k, v) -> hsetBoth(keyBytes, k, v), item, embeddingBytes);
+            writeFields(keyBytes, item, embeddingBytes);
             withCommands(
                     cmd -> cmd.expire(keyBytes, TTL_SECONDS),
                     cmd -> cmd.expire(keyBytes, TTL_SECONDS)
             );
         } catch (Exception e) {
-
             log.error(">>> 保存记忆主数据失败, key={}", key, e);
             return;
         }
@@ -273,24 +263,37 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
 
             stringRedisTemplate.opsForSet().add(userSetKey, item.id());
             stringRedisTemplate.expire(userSetKey, TTL_SECONDS, TimeUnit.SECONDS);
-            stringRedisTemplate.opsForValue().set(reverseKey, item.userId(), TTL_SECONDS, TimeUnit.SECONDS);
+            stringRedisTemplate.opsForValue().set(reverseKey, item.userId(),
+                    TTL_SECONDS, TimeUnit.SECONDS);
         } catch (Exception e) {
-            log.error(">>> 保存记忆辅助索引失败, userId={}, id={}", item.userId(), item.id(), e);
+            log.error(">>> 保存记忆辅助索引失败，回滚主数据, userId={}, id={}",
+                    item.userId(), item.id(), e);
+            // ★ 回滚主数据
+            try {
+                delBoth(keyBytes);
+            } catch (Exception re) {
+                log.error(">>> 回滚主数据也失败, key={}", key, re);
+            }
         }
     }
 
-    private void writeFields(BiConsumer<byte[], byte[]> hset, MemoryItem item, byte[] emb) {
-        hset.accept(b(FIELD_ID), b(item.id()));
-        hset.accept(b(FIELD_USER_ID), b(item.userId()));
-        hset.accept(b(FIELD_TYPE), b(item.type()));
-        hset.accept(b(FIELD_CONTENT), b(item.content() == null ? "" : item.content()));
-        hset.accept(b(FIELD_IMPORTANCE), b(String.valueOf(item.importance())));
-        hset.accept(b(FIELD_CREATED_AT), b(String.valueOf(item.createdAt())));
-        hset.accept(b(FIELD_UPDATED), b(String.valueOf(item.updatedAt())));
-        hset.accept(b(FIELD_INVALID), b(item.invalid() ? "1" : "0"));
+    private void writeFields(byte[] keyBytes, MemoryItem item, byte[] emb) {
+        Map<byte[], byte[]> map = new HashMap<>();
+        map.put(b(FIELD_ID), b(item.id()));
+        map.put(b(FIELD_USER_ID), b(item.userId()));
+        map.put(b(FIELD_TYPE), b(item.type()));
+        map.put(b(FIELD_CONTENT), b(item.content() == null ? "" : item.content()));
+        map.put(b(FIELD_IMPORTANCE), b(String.valueOf(item.importance())));
+        map.put(b(FIELD_CREATED_AT), b(String.valueOf(item.createdAt())));
+        map.put(b(FIELD_UPDATED), b(String.valueOf(item.updatedAt())));
+        map.put(b(FIELD_INVALID), b(item.invalid() ? "1" : "0"));
         if (emb != null && emb.length > 0) {
-            hset.accept(b(FIELD_EMBEDDING), emb);
+            map.put(b(FIELD_EMBEDDING), emb);
         }
+        withCommands(
+                cmd -> { cmd.hset(keyBytes, map); return null; },
+                cmd -> { cmd.hset(keyBytes, map); return null; }
+        );
     }
 
     // ===================== 向量检索 =====================
@@ -806,8 +809,22 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
 
             MemoryItem item = toItem(fields);
 
-            double distance = RedisBytes.asDouble(fields.get(FIELD_SCORE), 1.0);
-            double similarity = 1.0 - distance;
+            // 在 parseSearchHits 里：
+            double rawScore = RedisBytes.asDouble(fields.get(FIELD_SCORE), 1.0);
+
+// ★ 新增：区分 distance / similarity
+            double similarity;
+            if (SCORE_IS_DISTANCE) {
+                similarity = 1.0 - rawScore;
+            } else {
+                similarity = rawScore;
+            }
+
+            if (log.isDebugEnabled()) {
+                log.debug(">>> KNN rawScore={}, similarity={}, memoryId={}",
+                        rawScore, similarity, memoryId);
+            }
+            result.add(new MemoryHit(item, similarity));
             result.add(new MemoryHit(item, similarity));
         }
 

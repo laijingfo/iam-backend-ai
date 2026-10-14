@@ -1,5 +1,6 @@
 package com.lenovo.ai.llm.impl;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lenovo.ai.infra.sse.AiChatSseEmitter;
@@ -43,14 +44,15 @@ public class LangChain4jLlmClient implements LlmClient {
 //    private static final ObjectMapper MAPPER = new ObjectMapper();
     private final StreamingChatModel streamingModel;
     private final ChatModel chatModel;
-    private final ObjectMapper objectMapper;   // ★ 新增
+    // LangChain4jLlmClient 里
+    private static final ObjectMapper objectMapper = new ObjectMapper()
+            .setSerializationInclusion(JsonInclude.Include.ALWAYS);   // 允许 null
 
     public LangChain4jLlmClient(StreamingChatModel streamingModel,
                                 ChatModel chatModel,
                                 ObjectMapper objectMapper) {
         this.streamingModel = streamingModel;
         this.chatModel = chatModel;
-        this.objectMapper = objectMapper;
     }
 
     // =================================================================
@@ -253,7 +255,8 @@ public class LangChain4jLlmClient implements LlmClient {
                                     .arguments(toJson(ref.args()))
                                     .build())
                             .toList();
-                    result.add(AiMessage.from(requests));
+                    result.add(AiMessage.from(
+                            msg.content() == null ? "" : msg.content(), requests));
                 } else {
                     result.add(AiMessage.from(msg.content()));
                 }
@@ -309,29 +312,11 @@ public class LangChain4jLlmClient implements LlmClient {
     }
 
     // =================================================================
-    //  ★ 核心改动：toLlmResponse 增加 usage 参数
-    // =================================================================
-    private LlmResponse toLlmResponse(String content,
-                                      List<ToolExecutionRequest> requests,
-                                      int inputTokens, int outputTokens, int totalTokens) {
-        if (requests.isEmpty()) {
-            // ★ 使用 of() 补 usage
-            return LlmResponse.of(content, List.of(), inputTokens, outputTokens, totalTokens);
-        }
-        List<LlmResponse.ToolCall> toolCalls = requests.stream().map(req -> {
-            Map<String, Object> args = parseJson(req.arguments());
-            return new LlmResponse.ToolCall(req.id(), req.name(), args);
-        }).toList();
-        return LlmResponse.of(content, toolCalls, inputTokens, outputTokens, totalTokens);
-    }
-
-    // =================================================================
     //  Map → JSON / JSON → Map（不变）
     // =================================================================
     private String toJson(Map<String, Object> map) {
         if (map == null || map.isEmpty()) return "{}";
         try {
-            // 原：return MAPPER.writeValueAsString(map);
             return objectMapper.writeValueAsString(map);
         } catch (Exception e) {
             log.warn("toJson failed", e);

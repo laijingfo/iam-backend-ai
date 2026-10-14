@@ -30,13 +30,24 @@ public class AiChatSseEmitter extends SseEmitter {
         super(DEFAULT_TIMEOUT_MS);
     }
 
-    /** 注册关闭回调（可多次注册，不覆盖） */
+    private final Object closeLock = new Object();
+
     public void addCloseCallback(Runnable callback) {
         if (callback == null) return;
-        if (closed.get()) {
-            try { callback.run(); } catch (Exception ignored) {}
-        } else {
-            closeCallbacks.add(callback);
+        synchronized (closeLock) {
+            if (closed.get()) {
+                try { callback.run(); } catch (Exception ignored) {}
+            } else {
+                closeCallbacks.add(callback);
+            }
+        }
+    }
+
+    private void markClosed() {
+        if (closed.compareAndSet(false, true)) {
+            synchronized (closeLock) {
+                fireCallbacks();
+            }
         }
     }
 
@@ -58,12 +69,6 @@ public class AiChatSseEmitter extends SseEmitter {
         closeCallbacks.clear();
     }
 
-    /** 标记关闭（幂等） */
-    private void markClosed() {
-        if (closed.compareAndSet(false, true)) {
-            fireCallbacks();
-        }
-    }
 
     // ===================== send =====================
 

@@ -16,8 +16,9 @@ public interface Agent {
     /** 角色提示词，会注入到 messages 最前面（system 角色） */
     String rolePrompt();
 
-    /** 可用工具名白名单；["*"] 表示全部工具；空列表表示不调工具 */
-    List<String> allowedToolNames();
+    /** 可用工具名白名单；["*"] 表示全部工具；空列表表示不调工具。
+     *  默认空列表（最严格），子类必须显式声明。 */
+    default List<String> allowedToolNames() { return List.of(); }
 
     /** 可处理的意图标签，供 Router 匹配 */
     List<String> intents();

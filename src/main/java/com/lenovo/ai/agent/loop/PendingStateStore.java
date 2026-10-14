@@ -20,8 +20,8 @@ public class PendingStateStore {
     private static final String KEY_PREFIX = "ai:pending:";
 
     private final StringRedisTemplate redisTemplate;
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
+//    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
     public void save(AgentContext ctx) {
         try {
             PendingState state = new PendingState(

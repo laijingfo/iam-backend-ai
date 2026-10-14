@@ -1,5 +1,6 @@
 package com.lenovo.ai.memory.job;
 
+import com.lenovo.ai.infra.lock.RedisLockHelper;
 import com.lenovo.ai.memory.store.MemoryMaintenanceStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -7,6 +8,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -16,10 +18,27 @@ public class MemoryDecayJob {
     private static final double DECAY_FACTOR = 0.95;
     private static final double DELETE_THRESHOLD = 0.1;
 
+    private static final String LOCK_KEY = "ai:job:memory-decay";
+    private static final long LOCK_TTL_MS = 30 * 60 * 1000L;   // 30 分钟
+
     private final MemoryMaintenanceStore memoryMaintenanceStore;
+    private final RedisLockHelper redisLockHelper;
 
     @Scheduled(cron = "0 0 3 * * ?")
     public void decay() {
+        String token = UUID.randomUUID().toString();
+        if (!redisLockHelper.tryLock(LOCK_KEY, token, LOCK_TTL_MS)) {
+            log.info(">>> 记忆衰减任务已被其他实例执行，跳过");
+            return;
+        }
+        try {
+            doDecay();
+        } finally {
+            redisLockHelper.unlock(LOCK_KEY, token);
+        }
+    }
+
+    private void doDecay() {
         log.info(">>> 长期记忆衰减任务开始执行");
         long startTime = System.currentTimeMillis();
         int totalDecayed = 0;

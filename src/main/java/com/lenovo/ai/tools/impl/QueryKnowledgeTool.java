@@ -79,10 +79,11 @@ public class QueryKnowledgeTool implements AiTool {
         }
 
         Long kbId = parseKbId(args.get("knowledgeBaseId"));
-        if (kbId != null && !isValidKnowledgeId(kbId)) {
-            log.warn("[query_knowledge] 无效 knowledgeBaseId={}，回落自动路由", kbId);
+        if (kbId != null && !isValidFormat(kbId)) {
+            log.warn("[query_knowledge] knowledgeBaseId 格式非法={}，回落自动路由", kbId);
             kbId = null;
         }
+        // ★ 不再检查 templateRegistry，交给 queryOne 懒加载
 
         if (kbId == null) {
             kbId = knowledgeRouter.route(question);
@@ -96,18 +97,18 @@ public class QueryKnowledgeTool implements AiTool {
         return ToolResult.ok(content, Map.of("knowledgeBaseId", kbId));
     }
 
+    /** 只校验格式：13 位及以上纯数字 */
+    private boolean isValidFormat(Long id) {
+        if (id == null) return false;
+        String s = String.valueOf(id);
+        return s.length() >= MIN_KB_ID_LENGTH && s.matches("\\d+");
+    }
+
     private Long parseKbId(Object raw) {
         if (raw == null) return null;
         String s = String.valueOf(raw).trim();
         if (s.isEmpty() || "null".equalsIgnoreCase(s)) return null;
         try { return Long.parseLong(s); } catch (NumberFormatException e) { return null; }
-    }
-
-    private boolean isValidKnowledgeId(Long id) {
-        if (id == null) return false;
-        String s = String.valueOf(id);
-        if (s.length() < MIN_KB_ID_LENGTH || !s.matches("\\d+")) return false;
-        return templateRegistry.get(s) != null;
     }
 
     private String queryOne(Long knowledgeBaseId, String question) {

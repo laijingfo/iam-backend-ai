@@ -27,7 +27,7 @@ public class UserMemoryStore {
 
     private static final String PREFIX = "ai:memory:";
     // 将 EXACT_TTL_DAYS 从 30 改为 90+，与 RedisMemoryStore 的 TTL 对齐
-    private static final long EXACT_TTL_DAYS = 100;
+    private static final long EXACT_TTL_DAYS = 90L;
 
     /** 语义去重阈值：高于此分视为同一条 */
     private static final double SEMANTIC_DUP_SCORE = 0.95;
