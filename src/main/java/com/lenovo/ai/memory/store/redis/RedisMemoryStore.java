@@ -824,7 +824,7 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
                 log.debug(">>> KNN rawScore={}, similarity={}, memoryId={}",
                         rawScore, similarity, memoryId);
             }
-            result.add(new MemoryHit(item, similarity));
+            // ★ 修复：原实现此处重复 add 了两次，导致 topK=N 实际返回 2N 条两两相同的结果
             result.add(new MemoryHit(item, similarity));
         }
 

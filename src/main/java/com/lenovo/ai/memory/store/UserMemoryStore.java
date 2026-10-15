@@ -24,7 +24,17 @@ import java.util.concurrent.TimeUnit;
 public class UserMemoryStore {
 
     private static final String PREFIX = "ai:memory:";
-    private static final long EXACT_TTL_DAYS = 100;
+
+    /**
+     * 精确去重闸的 TTL（天）。
+     *
+     * <p><b>修复</b>：原值 100 天大于记忆本体 TTL（RedisMemoryStore.TTL_SECONDS = 90 天）。
+     * 记忆 90 天后过期消失，但 exactKey 仍存活约 10 天，
+     * 此期间相同内容再也存不进去，且没有任何补偿机制 —— 表现为"记忆静默丢失"。</p>
+     *
+     * <p>必须与记忆本体 TTL 一致或更短。</p>
+     */
+    private static final long EXACT_TTL_DAYS = 90;
 
     /** 语义去重阈值：高于此分视为同一条 */
     private static final double SEMANTIC_DUP_SCORE = 0.9;

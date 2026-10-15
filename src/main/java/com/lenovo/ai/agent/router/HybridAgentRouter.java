@@ -24,10 +24,26 @@ import java.util.stream.Collectors;
 public class HybridAgentRouter implements AgentRouter {
 
     private static final String FALLBACK_AGENT = "general";
-    private static final int COMPLEX_LENGTH_THRESHOLD = 80;
+    private static final String PLANNER_AGENT = "planner";
+
+    /**
+     * 复杂问题长度阈值。
+     *
+     * <p><b>修复</b>：原值 80 对中文过低——一句普通的中文提问很容易超过 80 字符，
+     * 导致几乎所有问题都被判为复杂、全部涌入 planner。
+     * 而 planner 路径当时存在静默降级缺陷，结果是"全站无响应"。</p>
+     */
+    private static final int COMPLEX_LENGTH_THRESHOLD = 200;
+
+    /**
+     * 并列 / 递进连接词。
+     *
+     * <p><b>修复</b>：移除了"先""再""另外""还要""分别"等高频单字/常用词，
+     * 仅保留真正表达"多意图并列"的双音节及以上连接词。</p>
+     */
     private static final List<String> COMPLEX_KEYWORDS = List.of(
-            "并且", "然后", "同时", "以及", "还要", "另外", "顺便",
-            "先", "再", "接着", "分别", "各自"
+            "并且", "然后", "同时", "以及", "接着", "顺便",
+            "另外再", "除此之外", "除此之外还"
     );
 
     private final AgentRegistry agentRegistry;
@@ -45,7 +61,7 @@ public class HybridAgentRouter implements AgentRouter {
 
         // 2. 复杂问题 → planner
         if (isComplex(req.question())) {
-            Agent planner = agentRegistry.get("planner");
+            Agent planner = agentRegistry.get(PLANNER_AGENT);
             if (planner != null) {
                 log.info(">>> 路由: 复杂问题, agent=planner");
                 return planner;
@@ -73,29 +89,42 @@ public class HybridAgentRouter implements AgentRouter {
         }
 
         // 5. 兜底
-        Agent fallback = agentRegistry.get(FALLBACK_AGENT);
-        log.info(">>> 路由: 兜底 agent={}, intent={}", FALLBACK_AGENT, intent);
-        return fallback;
+        return fallback(intent);
     }
 
     /**
-     * 复杂问题判断。保守策略：宁可漏判（走单 Agent），不要误判（走多 Agent）。
-     * 命中任一条件即视为复杂：
-     *   1. 长度超过阈值
-     *   2. 包含并列/递进连接词
-     *   3. 包含多个问号
-     * 即使误判，Planner 也可能只输出 1 个任务，代价是多一次 LLM 调用。
+     * 复杂问题判断。
+     *
+     * <p>保守策略：宁可漏判（走单 Agent），不要误判（走多 Agent）。
+     * 判为复杂需<b>同时</b>满足：</p>
+     * <ol>
+     *   <li>长度超过 {@link #COMPLEX_LENGTH_THRESHOLD}（说明信息量足够大）</li>
+     *   <li>且（含多问号 <b>或</b> 含并列/递进连接词）——说明存在多个意图</li>
+     * </ol>
+     * 仅有长度没有并列信号时，视为单一复杂问句，交给单 Agent 处理更稳。
      */
     private boolean isComplex(String question) {
         if (question == null) return false;
         String q = question.trim();
-        if (q.length() > COMPLEX_LENGTH_THRESHOLD) return true;
+        if (q.length() <= COMPLEX_LENGTH_THRESHOLD) return false;
+
         long qmCount = q.chars().filter(c -> c == '？' || c == '?').count();
-        if (qmCount > 1) return true;
+        boolean multiQuestion = qmCount > 1;
+
+        boolean hasConjunction = false;
         for (String kw : COMPLEX_KEYWORDS) {
-            if (q.contains(kw)) return true;
+            if (q.contains(kw)) {
+                hasConjunction = true;
+                break;
+            }
         }
-        return false;
+
+        boolean complex = multiQuestion || hasConjunction;
+        if (complex) {
+            log.debug(">>> 复杂问题判定: len={}, 问号数={}, 连接词={}",
+                    q.length(), qmCount, hasConjunction);
+        }
+        return complex;
     }
 
     private Agent llmPick(String question, List<Agent> candidates) {
@@ -116,6 +145,24 @@ public class HybridAgentRouter implements AgentRouter {
             log.warn(">>> 路由 LLM 选择失败，回退兜底", e);
             return null;
         }
+    }
+
+    /**
+     * 兜底 Agent。
+     *
+     * <p><b>修复</b>：原实现直接 {@code registry.get(FALLBACK_AGENT)} 后
+     * {@code .name()}，未注册时 NPE。这里显式判空。</p>
+     */
+    private Agent fallback(String intent) {
+        Agent fallback = agentRegistry.get(FALLBACK_AGENT);
+        if (fallback == null) {
+            log.error(">>> 兜底 Agent[{}] 未注册！请检查 AgentRegistry，当前 intent={}",
+                    FALLBACK_AGENT, intent);
+            throw new IllegalStateException(
+                    "兜底 Agent[" + FALLBACK_AGENT + "] 未注册，路由无法完成");
+        }
+        log.info(">>> 路由: 兜底 agent={}, intent={}", FALLBACK_AGENT, intent);
+        return fallback;
     }
 
     private String oneLine(String s) {

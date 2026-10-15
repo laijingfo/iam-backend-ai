@@ -61,9 +61,16 @@ public class AiToolContext {
                             .filter(name -> name != null && !name.isBlank())
                             .collect(Collectors.toSet());
                 }
+            } else if (raw != null) {
+                // ★ 数据结构与预期不符（例如存的是 List<Role> 而非 Role）
+                log.error("用户角色数据结构异常: userId={}, 实际类型={}",
+                        userId, raw.getClass().getName());
             }
         } catch (Exception e) {
-            log.warn("从 Redis 读取用户角色失败: userId={}", userId, e);
+            // ★ 升级为 error：角色为空会让 allowedRoles 不含 "*" 的工具
+            //   （create_ticket / query_user_info）对 ALL 用户返回"无权限调用该工具"，
+            //   属于需要立刻发现的线上问题，不能只打 warn。
+            log.error("从 Redis 读取用户角色失败: userId={}", userId, e);
         }
         return new HashSet<>();
     }

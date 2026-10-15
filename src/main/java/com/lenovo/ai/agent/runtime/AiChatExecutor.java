@@ -21,6 +21,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * - 核心线程 0，最大并发由 ai.chat.max-concurrent 控制，空闲 60s 回收。
  * - 队列容量有限（ai.chat.queue-capacity），避免无界堆积导致内存问题。
  * - 拒绝策略由调用方决定：execute 返回 false 表示被拒绝，不直接抛异常。
+ *
+ * ⚠️ 本池<b>只</b>用于跑 AgentLoop 主流程，<b>不要</b>用来执行工具。
+ * corePoolSize=0 且 AgentLoop 会阻塞等待工具结果，
+ * 提交工具任务会自死锁（详见 AsyncConfig#aiToolExecutor 的说明）。
  * - 关闭时先 shutdown 等待任务结束，超时再 shutdownNow。
  */
 @Slf4j

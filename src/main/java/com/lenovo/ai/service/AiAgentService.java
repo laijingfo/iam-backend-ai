@@ -11,11 +11,9 @@ import com.lenovo.ai.token.quota.TokenQuotaService;
 import com.lenovo.ai.tools.context.AiToolContext;
 import com.lenovo.util.RedisUtils;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,7 +63,6 @@ public class AiAgentService {
             return reject;
         }
 
-        Locale locale = LocaleContextHolder.getLocale();
         String sessionId = request.sessionId();
         String memoryId = userId + ":" + sessionId;
         String lockKey = "ai:chat:lock:" + memoryId;
@@ -140,11 +137,25 @@ public class AiAgentService {
             });
 
             // 7. 提交线程池
-            chatExecutor.execute(() -> runner.run(
-                    request, context, userId, newSession, sessionId,
-                    userMessageId, assistantMessageId, locale,
+            // ★ 修复：改用 submit(Runnable)，队列满时返回 false 并友好提示，
+            //   不再依赖 @Deprecated 的 execute() 抛 RejectedExecutionException
+            boolean accepted = chatExecutor.submit(() -> runner.run(
+                    request, context, userId, sessionId,
+                    userMessageId, assistantMessageId,
                     memoryId, lockKey, lockToken, emitter,
                     runId, requestId));
+
+            if (!accepted) {
+                log.error(">>> 线程池已满，请求被拒绝: memoryId={}, requestId={}",
+                        memoryId, requestId);
+                cleanup(requestId, sessionId);
+                try {
+                    emitter.send(SseEmitter.event().name("error")
+                            .data(Map.of("message", "系统繁忙，请稍后再试")));
+                } catch (Exception ignored) {}
+                emitter.complete();
+                redisLockHelper.unlock(lockKey, lockToken);
+            }
 
             return emitter;
 

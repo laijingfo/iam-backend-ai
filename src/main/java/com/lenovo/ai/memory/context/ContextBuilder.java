@@ -4,8 +4,13 @@ import com.lenovo.ai.infra.history.ChatHistoryStore;
 import com.lenovo.ai.llm.Message;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,6 +48,10 @@ public class ContextBuilder {
 
         List<Message> result = new ArrayList<>(systemMsgs);
 
+        // ★ 环境信息（当前日期）：确定性事实，每次实时生成
+        //   放在身份卡片之前，作为最基础的事实锚点
+        result.add(Message.system(buildEnvBlock()));
+
         // ★ 身份卡片：放最前面，优先级最高
         if (userProfileBlock != null && !userProfileBlock.isBlank()) {
             result.add(Message.system(userProfileBlock));
@@ -70,8 +79,81 @@ public class ContextBuilder {
         }
 
         if (newUserMsg != null && !newUserMsg.isBlank()) {
-            result.add(Message.user(newUserMsg));
+            // ★ 修复：调用方通常已在入库后再构建上下文，
+            //   此时 history.load 的结果里已包含这条 user 消息，
+            //   直接追加会导致同一条消息在上下文里出现两次。
+            if (isAlreadyPresent(result, newUserMsg)) {
+                log.debug(">>> 本轮用户消息已存在于历史中，跳过重复注入, sessionId={}", sessionId);
+            } else {
+                result.add(Message.user(newUserMsg));
+            }
         }
         return result;
+    }
+
+    /**
+     * 业务时区。
+     * <p>默认锁定 Asia/Shanghai，避免服务器跑在 UTC 时"早上问日期回答昨天"。</p>
+     */
+    @Value("${ai.timezone:Asia/Shanghai}")
+    private String zoneId;
+
+    private static final DateTimeFormatter CN_DATE =
+            DateTimeFormatter.ofPattern("yyyy年M月d日");
+
+    /**
+     * 构建环境信息块：把"今天"作为确定性事实直接注入。
+     *
+     * <p><b>为什么不用工具</b>：问"今天几号"时依赖模型主动调 date_tool 不可靠——
+     * 实测 GeneralAgent 会把这类问题归到"通用知识/闲聊"分支直接作答，
+     * 于是凭训练数据编造一个日期。日期是确定性信息，
+     * 直接注入 system 消息可以做到 100% 准确、零延迟、零 token 成本。</p>
+     *
+     * <p>同时给出 ISO 格式，方便模型在需要计算时直接引用。</p>
+     */
+    private String buildEnvBlock() {
+        ZoneId z;
+        try {
+            z = (zoneId == null || zoneId.isBlank())
+                    ? ZoneId.of("Asia/Shanghai") : ZoneId.of(zoneId.trim());
+        } catch (Exception e) {
+            log.warn("配置的业务时区非法: {}，回退 Asia/Shanghai", zoneId);
+            z = ZoneId.of("Asia/Shanghai");
+        }
+
+        LocalDate today = LocalDate.now(z);
+        String week = toChineseWeek(today.getDayOfWeek());
+
+        return "[当前环境信息]\n"
+                + "- 当前日期: " + today.format(CN_DATE) + "（" + week + "）\n"
+                + "- ISO 日期: " + today + "（日期计算请以这个为准）\n"
+                + "- 时区: " + z.getId() + "\n"
+                + "注意：这是系统的准确时间。用户问今天几号/星期几时直接采用，"
+                + "不要凭自己的知识推测。\n";
+    }
+
+    private String toChineseWeek(DayOfWeek dow) {
+        return switch (dow) {
+            case MONDAY -> "星期一";
+            case TUESDAY -> "星期二";
+            case WEDNESDAY -> "星期三";
+            case THURSDAY -> "星期四";
+            case FRIDAY -> "星期五";
+            case SATURDAY -> "星期六";
+            case SUNDAY -> "星期日";
+        };
+    }
+
+    /**
+     * 判断 newUserMsg 是否已经作为最后一条 user 消息存在。
+     * 只回看末尾若干条，避免长对话的 O(n) 全量比较。
+     */
+    private boolean isAlreadyPresent(List<Message> messages, String newUserMsg) {
+        for (int i = messages.size() - 1; i >= 0 && i >= messages.size() - 4; i--) {
+            Message m = messages.get(i);
+            if (m.role() != com.lenovo.ai.llm.enums.MessageRole.USER) continue;
+            if (newUserMsg.equals(m.content())) return true;
+        }
+        return false;
     }
 }

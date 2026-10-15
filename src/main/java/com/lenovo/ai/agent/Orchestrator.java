@@ -11,13 +11,13 @@ import com.lenovo.ai.agent.loop.AgentContext;
 import com.lenovo.ai.infra.history.ChatHistoryStore;
 import com.lenovo.ai.llm.Message;
 import com.lenovo.ai.memory.util.TextUtils;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -27,32 +27,39 @@ import java.util.UUID;
  * <p>SSE 约定：
  * <ul>
  *   <li>Planner / Synthesizer 静默（由 Agent.streamToUser() = false 保证）</li>
- *   <li>子任务 worker 正常推送 delta，用户可见"正在查知识库…"</li>
- *   <li>最终 done + complete 由本类统一发出</li>
+ *   <li>子任务 worker 通过 <b>子视图 emitter</b> 正常推送 delta，用户可见"正在查知识库…"</li>
+ *   <li>子视图会吞掉 done / complete，<b>最终 done + complete 由本类统一发出</b></li>
  * </ul>
  *
  * <p>落库约定：
  * <ul>
- *   <li>内部 Agent（Planner / Synthesizer）的 streamToUser=false，
- *       AgentLoop 不会落库</li>
- *   <li>子任务 worker 若 streamToUser=true，AgentLoop 会往
- *       <b>子 ctx 的 assistantMessageId</b> 落库（子 ctx fork 时用的是主 ctx 的 ID，
- *       所以会覆盖主 ID；但本类最后会再覆盖一次为最终答案，所以最终落库正确）</li>
+ *   <li>内部 Agent（Planner / Synthesizer）streamToUser=false，不落库</li>
+ *   <li>子任务 ctx 使用哨兵 messageId（{@link AgentContext#NO_PERSIST_ID}），
+ *       <b>不落库</b>，避免中间结果污染主消息</li>
  *   <li>本类末尾显式把 finalAnswer 落到主 ctx 的 assistantMessageId，
  *       确保 fallback 场景下也有落库</li>
  * </ul>
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class Orchestrator {
-
-    private final ObjectMapper objectMapper;
 
     private static final int MAX_SUBTASKS = 5;
 
+    /** 子任务整体时间预算（毫秒）：超出后剩余任务标记为超时，直接进汇总 */
+    private static final long SUBTASK_BUDGET_MS = 120_000L;
+
+    private final ObjectMapper objectMapper;
     private final AgentRegistry registry;
     private final ChatHistoryStore history;
+
+    public Orchestrator(ObjectMapper objectMapper,
+                        AgentRegistry registry,
+                        ChatHistoryStore history) {
+        this.objectMapper = objectMapper;
+        this.registry = registry;
+        this.history = history;
+    }
 
     public void execute(AgentContext ctx) {
         Blackboard board = ctx.blackboard();
@@ -63,15 +70,15 @@ public class Orchestrator {
         List<AgentTask> tasks = plan(ctx);
         if (tasks.isEmpty()) {
             log.warn(">>> 规划为空，降级到 general, runId={}", ctx.runId());
-            registry.get("general").execute(ctx);
-            // general 会自己发 done + complete
+            degradeToGeneral(ctx);
             return;
         }
         for (AgentTask t : tasks) board.postTask(t);
 
         // =========================================================
-        // 2. 逐个执行子任务（子任务可见 delta）
+        // 2. 逐个执行子任务（子任务可见 delta，但不发终结帧）
         // =========================================================
+        long startedAt = System.currentTimeMillis();
         List<AgentResult> results = new ArrayList<>();
         for (AgentTask task : board.pendingTasks()) {
             Agent worker = registry.get(task.agentName());
@@ -83,11 +90,28 @@ public class Orchestrator {
                 results.add(r);
                 continue;
             }
+
+            // ★ 整体预算：超预算后剩余任务不再执行，直接标记超时
+            if (System.currentTimeMillis() - startedAt > SUBTASK_BUDGET_MS) {
+                log.warn(">>> 子任务整体预算耗尽({}ms)，跳过剩余任务: runId={}, taskId={}",
+                        SUBTASK_BUDGET_MS, ctx.runId(), task.taskId());
+                AgentResult r = new AgentResult(task.taskId(), worker.name(), false,
+                        "执行超时（整体预算耗尽）", Map.of());
+                board.markTaskDone(task.taskId(), r);
+                results.add(r);
+                continue;
+            }
+
             try {
                 log.info(">>> 子任务执行: agent={}, taskId={}, instruction={}",
                         worker.name(), task.taskId(), preview(task.instruction()));
-                AgentContext sub = ctx.fork(task.instruction());
+
+                // ★ 子任务：继承历史 + 挂子视图 emitter + 哨兵 messageId（不落库）
+                AgentContext sub = ctx.fork(task.instruction(), true);
+                sub.setEmitter(ctx.emitter().childView());
+
                 worker.execute(sub);
+
                 AgentResult r = new AgentResult(task.taskId(), worker.name(), true,
                         sub.lastAssistantContent(), Map.of());
                 board.markTaskDone(task.taskId(), r);
@@ -106,9 +130,14 @@ public class Orchestrator {
         // =========================================================
         String summaryPrompt = buildSummaryPrompt(results);
         Agent synthesizer = registry.get("synthesizer");
-        AgentContext finalCtx = ctx.fork(summaryPrompt);
-        runMuted(synthesizer, finalCtx);
-        String finalAnswer = finalCtx.lastAssistantContent();
+        String finalAnswer = "";
+        if (synthesizer != null) {
+            AgentContext finalCtx = ctx.fork(summaryPrompt);
+            runMuted(synthesizer, finalCtx);
+            finalAnswer = finalCtx.lastAssistantContent();
+        } else {
+            log.warn(">>> synthesizer 未注册，直接使用降级答案, runId={}", ctx.runId());
+        }
 
         if (finalAnswer == null || finalAnswer.isBlank()) {
             finalAnswer = fallbackAnswer(results);
@@ -122,16 +151,16 @@ public class Orchestrator {
         board.setFinalAnswer(finalAnswer);
 
         // ★ 关键：把最终答案落到主 ctx 的 assistantMessageId
-        //   - 覆盖之前子任务 worker 可能写入的内容
+        //   - 子任务已用哨兵 ID，不会污染这里
         //   - 保证 fallback 场景下也有落库
-        //   - 保证 AiAgentRunner 第 9 步 loadAssistant 能读到真实答案
+        //   - 保证 AiAgentRunner 的 loadAssistant 能读到真实答案
         try {
             history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), finalAnswer);
         } catch (Exception e) {
             log.warn(">>> 落库最终答案失败: runId={}", ctx.runId(), e);
         }
 
-        // ★ 推送最终答案给用户
+        // ★ 推送最终答案给用户（终结帧统一由本类发出）
         try {
             ctx.emitter().send("delta", Map.of("text", finalAnswer));
         } catch (Exception e) {
@@ -146,9 +175,52 @@ public class Orchestrator {
     }
 
     /**
+     * 降级到 general。
+     *
+     * <p><b>关键修复</b>：进入编排时 AiAgentRunner 已把 ctx.streamToUser 置为
+     * planner 的 false。若直接复用该 ctx 执行 general，
+     * {@code AbstractAgent} 里 {@code stream = 自身 && 父ctx} 的结果仍是 false，
+     * 会被静默 —— 前端既收不到 delta，也收不到 done/complete，
+     * 只能干等到 emitter 300s 超时。</p>
+     *
+     * <p>因此降级前必须先恢复可见性。</p>
+     */
+    private void degradeToGeneral(AgentContext ctx) {
+        Agent general = registry.get("general");
+        if (general == null) {
+            log.error(">>> general 未注册，无法降级, runId={}", ctx.runId());
+            sendTerminal(ctx, "抱歉，当前无法处理该问题，请稍后重试。");
+            return;
+        }
+
+        ctx.setStreamToUser(true);
+        ctx.emitter().unmute();
+        ctx.emitter().setSuppressComplete(false);
+
+        general.execute(ctx);   // general 自己会发 done + complete
+    }
+
+    /** 兜底：直接给前端一个终结响应并落库 */
+    private void sendTerminal(AgentContext ctx, String text) {
+        ctx.messages().add(Message.assistant(text));
+        try {
+            history.appendAssistant(ctx.assistantMessageId(), ctx.sessionId(), text);
+        } catch (Exception e) {
+            log.warn(">>> 落库兜底答案失败: runId={}", ctx.runId(), e);
+        }
+        try {
+            ctx.emitter().send("delta", Map.of("text", text));
+            ctx.emitter().send("done", Map.of("messageId", ctx.assistantMessageId()));
+        } catch (Exception e) {
+            log.warn(">>> 推送兜底答案失败: runId={}", ctx.runId(), e);
+        }
+        ctx.emitter().complete();
+    }
+
+    /**
      * 调 Planner 产出任务列表。
      * <p>Planner 是 streamToUser=false，AbstractAgent 会自动 mute + suppressComplete，
-     * AgentLoop 也不会落库。</p>
+     * AgentLoop 也不会落库（哨兵 ID）。</p>
      */
     private List<AgentTask> plan(AgentContext ctx) {
         Agent planner = registry.get("planner");
@@ -240,7 +312,7 @@ public class Orchestrator {
     }
 
     private String preview(String s) {
-        if (s == null) return "null";
-        return s.length() <= 200 ? s : s.substring(0, 200) + "...";
+        return Objects.isNull(s) ? "null"
+                : (s.length() <= 200 ? s : s.substring(0, 200) + "...");
     }
 }

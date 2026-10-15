@@ -37,8 +37,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiredArgsConstructor
 public class KnowledgeRouter {
 
-    private static final Integer DEFAULT_PROJECT_ID = 79;
-    private static final String DEFAULT_IT_CODE = "laijf2";
     private static final double MIN_SCORE = 0.5;
     private static final int MAX_DESC_LENGTH = 500;
 
@@ -47,6 +45,22 @@ public class KnowledgeRouter {
 
     private final KnowledgeService knowledgeService;
     private final EmbeddingModel embeddingModel;
+
+    /**
+     * 知识库所属项目 ID。
+     * <p><b>修复</b>：原为硬编码 {@code 79}，不同环境（dev / test / prod）
+     * 项目 ID 不同，无法切换。改为配置项。</p>
+     */
+    @Value("${ai.knowledge-router.project-id:79}")
+    private Integer projectId;
+
+    /**
+     * 查询知识库列表时使用的 itCode。
+     * <p><b>修复</b>：原为硬编码 {@code laijf2}（某位开发同学的账号），
+     * 属个人信息泄漏且不可配置。改为配置项。</p>
+     */
+    @Value("${ai.knowledge-router.it-code:laijf2}")
+    private String itCode;
 
     @Value("${ai.knowledge-router.refresh-minutes:10}")
     private long refreshMinutes;
@@ -160,16 +174,24 @@ public class KnowledgeRouter {
     }
 
     /**
-     * 请求链路上的兜底：缓存为空时（后台预热还没跑完，或一直失败）尝试就地重建。
-     * 带节流与互斥，避免把下游打爆或让并发请求重复重建。
+     * 请求链路上的兜底：缓存为空时（后台预热还没跑完，或一直失败）触发一次重建。
+     *
+     * <p><b>修复</b>：原实现会同步调用 {@code refresh()}，即首个请求会
+     * 阻塞等待全部知识库的 embedding 完成（冷启动或下游抖动时可达数秒甚至更久），
+     * 直接拖垮首字延迟。改为<b>异步提交</b>：本次请求不等待，
+     * 缓存仍为空则返回 null，由调用方走默认知识库。</p>
+     *
+     * <p>仍保留节流与互斥，避免把下游打爆或让并发请求重复重建。</p>
      */
     private void ensureReady() {
         if (!kbVectors.isEmpty()) return;
         if (System.currentTimeMillis() - lastAttemptAt < retryBackoffMillis) return;
+
         try {
-            refresh();
+            refreshPool.submit(this::refreshQuietly);
+            log.info(">>> KnowledgeRouter 缓存为空，已提交异步重建，本次请求走默认知识库");
         } catch (Exception e) {
-            log.warn(">>> KnowledgeRouter 兜底重建向量失败", e);
+            log.warn(">>> KnowledgeRouter 提交异步重建失败", e);
         }
     }
 
@@ -251,8 +273,8 @@ public class KnowledgeRouter {
     private List<Long> getAllKnowledgeBaseIds() {
         try {
             ProjectBase base = new ProjectBase();
-            base.setProjectId(DEFAULT_PROJECT_ID);
-            base.setItCode(DEFAULT_IT_CODE);
+            base.setProjectId(projectId);
+            base.setItCode(itCode);
             List<Long> ids = knowledgeService.queryKnowledgeBase(base);
             return ids == null ? new ArrayList<>() : ids;
         } catch (Exception e) {

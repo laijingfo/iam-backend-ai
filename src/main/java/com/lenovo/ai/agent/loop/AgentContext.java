@@ -11,11 +11,23 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * 一次 Agent 执行的上下文。
+ *
+ * <p><b>assistantMessageId 哨兵约定</b>：
+ * 值为 {@link #NO_PERSIST_ID}（0）时表示"本 ctx 的结果不落库"。
+ * 多 Agent 编排的子任务必须使用该哨兵——它们的结果会被 Synthesizer 汇总后
+ * 由 Orchestrator 统一落到主 ctx 的消息 ID 上，子任务自行落库只会产生
+ * 中间态脏数据（例如配额超时的提示文本被当成最终答案）。</p>
+ */
 public class AgentContext {
+
+    /** 哨兵：不落库的消息 ID */
+    public static final long NO_PERSIST_ID = 0L;
 
     private final List<Message> messages;
     private final AiToolContext toolContext;
-    private final AiChatSseEmitter emitter;
+    private AiChatSseEmitter emitter;
     private final String sessionId;
     private final long assistantMessageId;
     private final String runId;
@@ -73,24 +85,51 @@ public class AgentContext {
     public boolean streamToUser() { return streamToUser; }
     public void setStreamToUser(boolean streamToUser) { this.streamToUser = streamToUser; }
 
+    /** 本 ctx 是否需要将结果落库 */
+    public boolean shouldPersist() { return assistantMessageId > NO_PERSIST_ID; }
+
+    /** ★ 新增：替换 emitter（用于给子任务挂 childView） */
+    public void setEmitter(AiChatSseEmitter emitter) {
+        if (emitter != null) this.emitter = emitter;
+    }
+
     // ★ 新增
     public String getModelName() { return modelName; }
     public void setModelName(String modelName) { this.modelName = modelName; }
 
+    /**
+     * 派生子上下文（不继承历史对话）。
+     * <p>子 ctx 使用哨兵 messageId，结果不落库。</p>
+     */
     public AgentContext fork(String instruction) {
+        return fork(instruction, false);
+    }
+
+    /**
+     * 派生子上下文。
+     *
+     * @param instruction    子任务指令（作为 user 消息）
+     * @param inheritHistory 是否继承父 ctx 的非 system 历史消息。
+     *                       子任务 worker 需要看上文做指代消解时传 true
+     */
+    public AgentContext fork(String instruction, boolean inheritHistory) {
         List<Message> sub = new ArrayList<>();
 
-        // ★ 继承父 ctx 的 system 消息（保留全局约束）
         for (Message m : this.messages) {
             if (m.role() == MessageRole.SYSTEM) {
+                // ★ 继承父 ctx 的 system 消息（保留全局约束、身份卡片等）
+                sub.add(m);
+            } else if (inheritHistory) {
+                // ★ 可选：继承历史对话，避免子任务丢失指代上下文
                 sub.add(m);
             }
         }
 
         sub.add(Message.user(instruction));
 
+        // ★ 子任务统一用哨兵 ID，不落库；由 Orchestrator 汇总后统一落主 ID
         AgentContext child = new AgentContext(sub, this.toolContext, this.emitter,
-                this.sessionId, this.assistantMessageId, this.runId, this.memoryId);
+                this.sessionId, NO_PERSIST_ID, this.runId, this.memoryId);
         child.setBlackboard(this.blackboard);
         child.setStreamToUser(this.streamToUser);
         child.setModelName(this.modelName);

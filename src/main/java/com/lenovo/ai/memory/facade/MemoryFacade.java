@@ -47,6 +47,39 @@ public class MemoryFacade {
         return contextBuilder.build(sessionId, newUserMsg, memoryBlock);
     }
 
+    /**
+     * 构建对话上下文（完整签名：身份卡片 + 提及用户卡片 + 长期记忆 + 历史摘要）。
+     *
+     * <p>主链路（AiAgentRunner）应使用本方法，保证与门面行为一致。</p>
+     *
+     * @param userId            用户 ID
+     * @param sessionId         会话 ID
+     * @param newUserMsg        本轮用户消息
+     * @param userProfileBlock  当前登录用户身份卡片，可为 null
+     * @param mentionedUserBlock 输入中提及的其他用户卡片，可为 null
+     */
+    public List<Message> buildContext(String userId, String sessionId, String newUserMsg,
+                                      String userProfileBlock, String mentionedUserBlock) {
+        String memoryBlock = recallAsBlock(userId, newUserMsg);
+        return contextBuilder.build(sessionId, newUserMsg,
+                userProfileBlock, mentionedUserBlock, memoryBlock);
+    }
+
+    /**
+     * 构建对话上下文（调用方已自行召回记忆时使用本重载）。
+     *
+     * <p>主链路会把"长期记忆召回"与其他远程装配并行执行，
+     * 若走 {@link #buildContext(String, String, String, String, String)}
+     * 会再触发一次 embedding + KNN 检索，造成每轮两次向量调用。
+     * 本重载接受已算好的 memoryBlock，避免重复。</p>
+     */
+    public List<Message> buildContext(String userId, String sessionId, String newUserMsg,
+                                      String userProfileBlock, String mentionedUserBlock,
+                                      String memoryBlock) {
+        return contextBuilder.build(sessionId, newUserMsg,
+                userProfileBlock, mentionedUserBlock, memoryBlock);
+    }
+
     // =========================================================
     // 抽取
     // =========================================================

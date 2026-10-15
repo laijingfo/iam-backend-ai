@@ -7,6 +7,8 @@ import com.lenovo.ai.infra.sse.AiChatSseEmitter;
 import com.lenovo.ai.llm.LlmClient;
 import com.lenovo.ai.llm.LlmResponse;
 import com.lenovo.ai.llm.Message;
+import com.lenovo.ai.llm.cache.CachedTokenExtractor;
+import com.lenovo.ai.llm.cache.CachedTokenListener;
 import com.lenovo.ai.llm.enums.MessageRole;
 import com.lenovo.ai.tools.ToolSpec;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -25,6 +27,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.output.TokenUsage;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -32,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Slf4j
 @Component
@@ -41,32 +45,79 @@ public class LangChain4jLlmClient implements LlmClient {
     private static final int CHAT_SIMPLE_MAX_RETRIES = 3;
     private static final long CHAT_SIMPLE_RETRY_BACKOFF_MS = 500;
     private static final int LOG_RESP_PREVIEW_LEN = 500;
-//    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final StreamingChatModel streamingModel;
     private final ChatModel chatModel;
-    // LangChain4jLlmClient 里
-    private static final ObjectMapper objectMapper = new ObjectMapper()
-            .setSerializationInclusion(JsonInclude.Include.ALWAYS);   // 允许 null
+
+    /**
+     * Bean 默认模型名。
+     * 用于两处：① modelName 为 null 时的兜底；② 目标模型不存在时的回退重试目标。
+     */
+    @Value("${langchain4j.open-ai.streaming-chat-model.model-name:}")
+    private String defaultModelName;
+
+    /** 兜底的兜底 */
+    private static final String LAST_RESORT_MODEL = "qwen3-max";
+
+    /**
+     * ★ 修复：原实现构造器接收了 objectMapper 却丢弃不用，
+     * 方法内改用 private static final 实例，导致 JacksonConfig
+     * 统一配置的模块 / 时区 / 命名策略在此处完全失效。
+     */
+    private final ObjectMapper objectMapper;
 
     public LangChain4jLlmClient(StreamingChatModel streamingModel,
                                 ChatModel chatModel,
                                 ObjectMapper objectMapper) {
         this.streamingModel = streamingModel;
         this.chatModel = chatModel;
+        this.objectMapper = (objectMapper != null ? objectMapper : new ObjectMapper())
+                .copy()
+                .setSerializationInclusion(JsonInclude.Include.ALWAYS);   // 允许 null
     }
 
     // =================================================================
     //  chatStream
     // =================================================================
+
     @Override
     public LlmResponse chatStream(List<Message> messages, List<ToolSpec> tools,
                                   AiChatSseEmitter emitter) {
+        return chatStream(messages, tools, emitter, null);
+    }
+
+    @Override
+    public LlmResponse chatStream(List<Message> messages, List<ToolSpec> tools,
+                                  AiChatSseEmitter emitter, String modelName) {
+        String target = resolveModel(modelName);
+        LlmResponse resp = doStream(messages, tools, emitter, target);
+
+        // ★ 模型不存在 → 回退 Bean 默认模型重试一次
+        //   仅在尚未产出任何 delta 时重试，避免把两段内容拼在一起推给前端
+        String fallback = resolveModel(null);
+        if (resp.isFailed()
+                && isModelUnavailable(resp.error())
+                && !target.equals(fallback)
+                && (resp.content() == null || resp.content().isEmpty())) {
+            log.warn(">>> 模型[{}]不可用，自动回退默认模型[{}]重试", target, fallback);
+            return doStream(messages, tools, emitter, fallback);
+        }
+        return resp;
+    }
+
+    /** 实际执行流式调用 */
+    private LlmResponse doStream(List<Message> messages, List<ToolSpec> tools,
+                                 AiChatSseEmitter emitter, String modelName) {
         List<ChatMessage> chatMessages = toChatMessages(messages);
         List<ToolSpecification> toolSpecs = toToolSpecifications(tools);
 
         ChatRequest.Builder requestBuilder = ChatRequest.builder().messages(chatMessages);
         if (!toolSpecs.isEmpty()) {
             requestBuilder.toolSpecifications(toolSpecs);
+        }
+        // ★ 修复：让 ModelRouter 的选择真正生效（原实现从未设置 modelName）
+        if (modelName != null && !modelName.isBlank()) {
+            requestBuilder.modelName(modelName);
         }
         ChatRequest request = requestBuilder.build();
 
@@ -90,7 +141,7 @@ public class LangChain4jLlmClient implements LlmClient {
             public void onCompleteResponse(ChatResponse completeResponse) {
                 try {
                     AiMessage aiMessage = completeResponse.aiMessage();
-                    if (aiMessage.hasToolExecutionRequests()) {
+                    if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
                         toolRequests.addAll(aiMessage.toolExecutionRequests());
                     }
 
@@ -101,7 +152,7 @@ public class LangChain4jLlmClient implements LlmClient {
                         usageHolder[1] = tu.outputTokenCount() == null ? 0 : tu.outputTokenCount();
                         usageHolder[2] = tu.totalTokenCount() == null ? 0 : tu.totalTokenCount();
 
-                        // ★ 提取 cachedTokens（从原始响应的 prompt_tokens_details.cached_tokens）
+                        // ★ 提取 cachedTokens
                         usageHolder[3] = extractCachedTokens(completeResponse);
                     }
 
@@ -115,36 +166,95 @@ public class LangChain4jLlmClient implements LlmClient {
 
             @Override
             public void onError(Throwable error) {
-                log.error("StreamingChatResponseHandler onError", error);
-                // ★ 出错也返回已产生的 usage
-                future.complete(toLlmResponse(
-                        fullContent.toString(), toolRequests,
-                        usageHolder[0], usageHolder[1], usageHolder[2], usageHolder[3]));
+                // ★ 修复：原实现用 future.complete(...) 把失败当成"正常返回空内容"，
+                //   导致上游 5xx / 流中断最终表现为前端收到一条空白回复。
+                //   现改为返回 failed 响应，由 AgentLoop 走 error 分支（不落库、不发 done）。
+                log.error("StreamingChatResponseHandler onError, model={}", modelName, error);
+                future.complete(LlmResponse.failed(
+                        fullContent.toString(),
+                        toLlmResponse("", toolRequests,
+                                usageHolder[0], usageHolder[1], usageHolder[2], usageHolder[3]),
+                        error));
             }
         });
 
         try {
             return future.get(STREAM_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            // ★ 修复：超时同样不能静默成空答案
+            log.error("chatStream 超时 {}s, model={}", STREAM_TIMEOUT_SECONDS, modelName);
+            return LlmResponse.failed(fullContent.toString(), e);
         } catch (Exception e) {
-            log.error("chatStream 超时或异常", e);
-            // ★ 使用 of() 补 0 usage
-            return LlmResponse.of("", List.of());
+            log.error("chatStream 异常, model={}", modelName, e);
+            return LlmResponse.failed(fullContent.toString(), e);
         }
     }
-    /** 从 LangChain4j 响应中提取 cachedTokens */
+
+    /** 决定实际使用的模型：入参为空则用 Bean 默认模型 */
+    private String resolveModel(String modelName) {
+        if (modelName != null && !modelName.isBlank()) {
+            return modelName.trim();
+        }
+        return (defaultModelName == null || defaultModelName.isBlank())
+                ? LAST_RESORT_MODEL
+                : defaultModelName.trim();
+    }
+
+    /**
+     * 判断是否为"模型不存在 / 模型无权限"类错误。
+     * <p>逐层检查 cause，覆盖不同 LangChain4j 版本抛出的异常类型。</p>
+     */
+    private boolean isModelUnavailable(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof dev.langchain4j.exception.ModelNotFoundException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg == null) continue;
+            String lower = msg.toLowerCase();
+            if (lower.contains("model_not_found")
+                    || lower.contains("model not exist")
+                    || lower.contains("model does not exist")
+                    || lower.contains("model_not_exist")
+                    || lower.contains("invalid model")
+                    || lower.contains("unknown model")
+                    || lower.contains("model is not available")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 从响应中提取 cachedTokens。
+     *
+     * <p>优先取 {@link CachedTokenListener} 在本次响应中捕获的值（并清除 ThreadLocal，
+     * 避免线程池复用导致数据串台与内存泄漏）；取不到再从响应 metadata / aiMessage
+     * attributes 里用 {@link CachedTokenExtractor} 兜底。</p>
+     */
     private int extractCachedTokens(ChatResponse response) {
         try {
-            // LangChain4j 的 TokenUsage 不直接暴露 cachedTokens
-            // 尝试从 metadata 或原始响应中提取
+            // 路径 1：listener 捕获（★ getAndClear 会移除 ThreadLocal）
+            int fromListener = CachedTokenListener.getAndClear();
+            if (fromListener > 0) {
+                return fromListener;
+            }
+        } catch (Exception e) {
+            log.debug("读取 CachedTokenListener 失败", e);
+        }
+
+        try {
+            // 路径 2：metadata
             Object metadata = response.metadata();
-            if (metadata instanceof Map<?, ?> map) {
-                Object details = map.get("prompt_tokens_details");
-                if (details instanceof Map<?, ?> detailsMap) {
-                    Object cached = detailsMap.get("cached_tokens");
-                    if (cached instanceof Number n) {
-                        return n.intValue();
-                    }
-                }
+            if (metadata != null) {
+                int v = CachedTokenExtractor.extractFromNode(objectMapper.valueToTree(metadata));
+                if (v > 0) return v;
+            }
+            // 路径 3：aiMessage attributes
+            if (response.aiMessage() != null && response.aiMessage().attributes() != null) {
+                int v = CachedTokenExtractor.extractFromNode(
+                        objectMapper.valueToTree(response.aiMessage().attributes()));
+                if (v > 0) return v;
             }
         } catch (Exception e) {
             log.debug("提取 cachedTokens 失败", e);
@@ -155,21 +265,23 @@ public class LangChain4jLlmClient implements LlmClient {
     private LlmResponse toLlmResponse(String content,
                                       List<ToolExecutionRequest> requests,
                                       int inputTokens, int outputTokens, int totalTokens,
-                                      int cachedTokens) {          // ★ 新增参数
+                                      int cachedTokens) {
         if (requests.isEmpty()) {
             return LlmResponse.of(content, List.of(),
-                    inputTokens, outputTokens, totalTokens, cachedTokens);   // ★ 传 5 个
+                    inputTokens, outputTokens, totalTokens, cachedTokens);
         }
         List<LlmResponse.ToolCall> toolCalls = requests.stream().map(req -> {
             Map<String, Object> args = parseJson(req.arguments());
             return new LlmResponse.ToolCall(req.id(), req.name(), args);
         }).toList();
         return LlmResponse.of(content, toolCalls,
-                inputTokens, outputTokens, totalTokens, cachedTokens);       // ★ 传 5 个
+                inputTokens, outputTokens, totalTokens, cachedTokens);
     }
+
     // =================================================================
-    //  chatSimple（逻辑完全不变）
+    //  chatSimple
     // =================================================================
+
     @Override
     public String chatSimple(String prompt) {
         if (prompt == null || prompt.isBlank()) return "";
@@ -237,11 +349,15 @@ public class LangChain4jLlmClient implements LlmClient {
     }
 
     // =================================================================
-    //  内部消息 → L4j 消息（不变）
+    //  内部消息 → L4j 消息
     // =================================================================
+
     private List<ChatMessage> toChatMessages(List<Message> messages) {
         List<ChatMessage> result = new ArrayList<>();
+        if (messages == null) return result;
+
         for (Message msg : messages) {
+            if (msg == null) continue;
             if (msg.role() == MessageRole.SYSTEM) {
                 result.add(new SystemMessage(msg.content()));
             } else if (msg.role() == MessageRole.USER) {
@@ -258,7 +374,8 @@ public class LangChain4jLlmClient implements LlmClient {
                     result.add(AiMessage.from(
                             msg.content() == null ? "" : msg.content(), requests));
                 } else {
-                    result.add(AiMessage.from(msg.content()));
+                    // ★ 修复：原实现未判空，content 为 null 时 NPE
+                    result.add(AiMessage.from(msg.content() == null ? "" : msg.content()));
                 }
             } else if (msg.role() == MessageRole.TOOL) {
                 result.add(ToolExecutionResultMessage.from(msg.toolCallId(), null, msg.content()));
@@ -268,8 +385,9 @@ public class LangChain4jLlmClient implements LlmClient {
     }
 
     // =================================================================
-    //  工具描述转换（不变）
+    //  工具描述转换
     // =================================================================
+
     @SuppressWarnings("unchecked")
     private List<ToolSpecification> toToolSpecifications(List<ToolSpec> tools) {
         if (tools == null || tools.isEmpty()) return List.of();
@@ -312,8 +430,9 @@ public class LangChain4jLlmClient implements LlmClient {
     }
 
     // =================================================================
-    //  Map → JSON / JSON → Map（不变）
+    //  Map → JSON / JSON → Map
     // =================================================================
+
     private String toJson(Map<String, Object> map) {
         if (map == null || map.isEmpty()) return "{}";
         try {
@@ -327,7 +446,6 @@ public class LangChain4jLlmClient implements LlmClient {
     private Map<String, Object> parseJson(String json) {
         if (json == null || json.isBlank()) return Map.of();
         try {
-            // 原：return MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
             return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
             log.warn("parseJson failed: {}", json, e);

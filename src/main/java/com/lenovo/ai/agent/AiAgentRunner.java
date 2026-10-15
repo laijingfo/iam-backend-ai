@@ -12,30 +12,36 @@ import com.lenovo.ai.infra.lock.RedisLockHelper;
 import com.lenovo.ai.infra.sse.AiChatSseEmitter;
 import com.lenovo.ai.llm.Message;
 import com.lenovo.ai.llm.enums.MessageRole;
-import com.lenovo.ai.memory.context.ContextBuilder;
-import com.lenovo.ai.memory.extractor.MemoryExtractor;
+import com.lenovo.ai.memory.facade.MemoryFacade;
 import com.lenovo.ai.memory.model.MemoryItem;
-import com.lenovo.ai.memory.store.UserMemoryStore;
 import com.lenovo.ai.token.context.ContextTrimmer;
+import com.lenovo.ai.token.estimator.TokenEstimator;
+import com.lenovo.ai.token.quota.TokenQuotaService;
 import com.lenovo.ai.tools.context.AiToolContext;
 import com.lenovo.entity.LenovoUser;
 import com.lenovo.service.LenovoService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * 一次对话的主链路编排。
+ *
+ * <p>职责边界：装配上下文 → 选 Agent → 选模型 → 执行 → 落库 → 抽取记忆。
+ * 本类不直接依赖 memory 内部组件，统一走 {@link MemoryFacade}。</p>
+ */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class AiAgentRunner {
 
     private static final String MULTI_AGENT = "planner";
@@ -51,9 +57,10 @@ public class AiAgentRunner {
     /** 一次最多查询的提及用户数，避免远程调用打爆 */
     private static final int MAX_MENTIONED_USERS = 3;
 
-    private final ContextBuilder contextBuilder;
-    private final UserMemoryStore userMemoryStore;
-    private final MemoryExtractor memoryExtractor;
+    /** 上下文装配单项超时（秒）：超时即降级为空，不阻塞整轮 */
+    private static final int CONTEXT_FETCH_TIMEOUT_SECONDS = 2;
+
+    private final MemoryFacade memoryFacade;
     private final ChatHistoryStore history;
     private final RedisLockHelper redisLockHelper;
 
@@ -63,14 +70,45 @@ public class AiAgentRunner {
 
     private final ContextTrimmer contextTrimmer;
     private final ModelRouter modelRouter;
+    private final TokenQuotaService quotaService;
+    private final TokenEstimator tokenEstimator;
 
     /** ★ 联想用户服务 */
     private final LenovoService lenovoService;
 
+    /** ★ 上下文装配线程池 */
+    private final Executor contextExecutor;
+
+    public AiAgentRunner(MemoryFacade memoryFacade,
+                         ChatHistoryStore history,
+                         RedisLockHelper redisLockHelper,
+                         AgentRouter agentRouter,
+                         BlackboardFactory blackboardFactory,
+                         Orchestrator orchestrator,
+                         ContextTrimmer contextTrimmer,
+                         ModelRouter modelRouter,
+                         TokenQuotaService quotaService,
+                         TokenEstimator tokenEstimator,
+                         LenovoService lenovoService,
+                         @Qualifier("contextExecutor") Executor contextExecutor) {
+        this.memoryFacade = memoryFacade;
+        this.history = history;
+        this.redisLockHelper = redisLockHelper;
+        this.agentRouter = agentRouter;
+        this.blackboardFactory = blackboardFactory;
+        this.orchestrator = orchestrator;
+        this.contextTrimmer = contextTrimmer;
+        this.modelRouter = modelRouter;
+        this.quotaService = quotaService;
+        this.tokenEstimator = tokenEstimator;
+        this.lenovoService = lenovoService;
+        this.contextExecutor = contextExecutor;
+    }
+
     public void run(ChatRequest request, AiToolContext toolContext, String userId,
-                    boolean newSession, String sessionId,
+                    String sessionId,
                     long userMessageId, long assistantMessageId,
-                    Locale locale, String memoryId, String lockKey,
+                    String memoryId, String lockKey,
                     String token, AiChatSseEmitter emitter,
                     String runId, String requestId) {
 
@@ -86,29 +124,51 @@ public class AiAgentRunner {
 
             history.appendUser(userMessageId, sessionId, userId, request.message());
 
-            // ★ 1. 当前登录用户身份卡片（"我是谁"）
-            String profileBlock = buildUserProfileBlock(userId, toolContext);
+            // ★ 1~3 并行装配：身份卡片 / 提及用户 / 长期记忆
+            //   原先三者串行，首字延迟 = 三次 RT 之和；这里并行 + 各自超时降级
+            String userMessage = request.message();
 
-            // ★ 2. 输入里提到的其他用户
-            String mentionedBlock = buildMentionedUserBlock(request.message(), userId);
+            CompletableFuture<String> profileFuture = supplyGuarded(
+                    () -> buildUserProfileBlock(userId, toolContext), "身份卡片");
+            CompletableFuture<String> mentionedFuture = supplyGuarded(
+                    () -> buildMentionedUserBlock(userMessage, userId), "提及用户");
+            CompletableFuture<String> memoryFuture = supplyGuarded(
+                    () -> buildMemoryBlock(userId, userMessage), "长期记忆");
 
-            // ★ 3. 长期记忆
-            List<MemoryItem> memories = userMemoryStore.recall(userId, request.message(), 5);
-            String memoryBlock = memories.stream()
-                    .map(m -> "- [" + m.type() + "] " + m.content())
-                    .collect(Collectors.joining("\n"));
+            String profileBlock = profileFuture.join();
+            String mentionedBlock = mentionedFuture.join();
+            String memoryBlock = memoryFuture.join();
 
-            // ★ 4. 分开注入
-            List<Message> rawMessages = contextBuilder.build(
-                    sessionId, request.message(), profileBlock, mentionedBlock, memoryBlock);
+            // ★ 4. 分开注入（ContextBuilder 内部已处理本轮消息的重复注入）
+            //    memoryBlock 已在上面并行召回，这里直接传入，避免门面再召回一次
+            List<Message> rawMessages = memoryFacade.buildContext(
+                    userId, sessionId, userMessage, profileBlock, mentionedBlock, memoryBlock);
+
             List<Message> messages = trimContext(rawMessages);
 
+            // ★ 单次请求配额校验（原先 checkSingleRequest 定义了却无人调用）
+            try {
+                int estimated = estimateTokens(messages);
+                quotaService.checkSingleRequest(userId, estimated);
+            } catch (Exception e) {
+                log.warn(">>> 单次请求超限, userId={}, runId={}", userId, runId);
+                safeSend(emitter, "error", Map.of(
+                        "code", "QUOTA_EXCEEDED",
+                        "message", e.getMessage() == null ? "单次请求过大" : e.getMessage()));
+                try {
+                    history.appendAssistant(assistantMessageId, sessionId,
+                            "[" + e.getMessage() + "]");
+                } catch (Exception ignore) {}
+                emitter.complete();
+                return;
+            }
+
             Agent agent = agentRouter.route(new RoutingRequest(
-                    request.message(), userId, sessionId,
+                    userMessage, userId, sessionId,
                     request.agentName(), toolContext.roleSet()));
 
             String modelName = modelRouter.select(
-                    agent.name(), request.message(), Math.max(0, messages.size() - 1));
+                    agent.name(), userMessage, Math.max(0, messages.size() - 1));
 
             AgentContext ctx = new AgentContext(
                     messages, toolContext, emitter, sessionId,
@@ -138,10 +198,10 @@ public class AiAgentRunner {
                 log.warn(">>> 助手消息为空，跳过记忆抽取: runId={}", runId);
             } else {
                 List<Message> turn = List.of(
-                        Message.user(request.message()),
+                        Message.user(userMessage),
                         Message.assistant(assistantContent)
                 );
-                memoryExtractor.extract(userId, turn);
+                memoryFacade.extractAsync(userId, turn);
             }
 
         } catch (Exception e) {
@@ -163,6 +223,44 @@ public class AiAgentRunner {
                 log.warn("解锁失败: lockKey={}", lockKey, e);
             }
         }
+    }
+
+    // =====================================================================
+    //  上下文装配（可并行）
+    // =====================================================================
+
+    private String buildMemoryBlock(String userId, String message) {
+        try {
+            List<MemoryItem> memories = memoryFacade.recall(userId, message, 5);
+            return memories.stream()
+                    .map(m -> "- [" + m.type() + "] " + m.content())
+                    .collect(Collectors.joining("\n"));
+        } catch (Exception e) {
+            log.warn(">>> 长期记忆召回失败，降级为空: userId={}", userId, e);
+            return "";
+        }
+    }
+
+    /** 带超时与降级的异步装配任务 */
+    private CompletableFuture<String> supplyGuarded(java.util.function.Supplier<String> supplier,
+                                                    String name) {
+        CompletableFuture<String> f = CompletableFuture
+                .supplyAsync(supplier, contextExecutor)
+                .orTimeout(CONTEXT_FETCH_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        return f.exceptionally(e -> {
+            log.warn(">>> 上下文装配[{}]失败或超时({}s)，降级为空",
+                    name, CONTEXT_FETCH_TIMEOUT_SECONDS, e);
+            return "";
+        });
+    }
+
+    private int estimateTokens(List<Message> messages) {
+        if (messages == null || messages.isEmpty()) return 0;
+        int sum = 0;
+        for (Message m : messages) {
+            sum += tokenEstimator.estimate(m.content());
+        }
+        return sum;
     }
 
     // =====================================================================
@@ -217,6 +315,10 @@ public class AiAgentRunner {
         sb.append("如实告知\"系统中未记录您的职位信息\"，不要编造。\n");
         sb.append("4. 调用工具时，涉及\"我的 xxx\"的场景，");
         sb.append("使用上面这个 itCode，不要向用户索要 itCode。\n");
+        sb.append("5. 【冲突消解】如果[关于用户的已知信息]里的历史记忆");
+        sb.append("与本卡片的字段不一致（例如记忆里说\"用户自称是经理\"、");
+        sb.append("但本卡片职位是\"研发工程师\"），");
+        sb.append("一律以本卡片的实时数据为准——记忆是历史对话的抽取结果，可能过时或有误。\n");
 
         return sb.toString();
     }
