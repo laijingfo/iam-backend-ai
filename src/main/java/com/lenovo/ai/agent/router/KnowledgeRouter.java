@@ -37,7 +37,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiredArgsConstructor
 public class KnowledgeRouter {
 
-    private static final double MIN_SCORE = 0.5;
+    /**
+     * 路由相似度阈值。
+     *
+     * <p><b>修复</b>：原为硬编码 0.5 且低于阈值直接返回 null。
+     * 短问题（如"审核人是谁"）与知识库描述的余弦相似度往往达不到 0.5，
+     * 于是路由失败 → 工具报"无法判断知识库" → 模型转而反问用户，
+     * 明明知识库里就有答案。现改为可配置，且低于阈值也返回最相近的库。</p>
+     */
+    @Value("${ai.knowledge-router.min-score:0.3}")
+    private double minScore;
+
     private static final int MAX_DESC_LENGTH = 500;
 
     /** 并行刷新的并发度，避免打爆下游 embedding 服务 */
@@ -195,13 +205,46 @@ public class KnowledgeRouter {
         }
     }
 
+    /**
+     * 兜底知识库 ID：向量不可用时直接使用。
+     *
+     * <p><b>强烈建议配置</b>：当知识库数量少（尤其只有 1 个）、
+     * 或 embedding 服务不稳定时，路由意义不大且极易失败。
+     * 配上它等于给知识库检索上了保险。</p>
+     */
+    @Value("${ai.knowledge-router.default-kb-id:}")
+    private String defaultKbId;
+
+    /**
+     * 路由到知识库。
+     *
+     * <p>兜底顺序：<b>单库直返 → 缓存空用默认库 → 相似度选最优（低于阈值也返回最优）</b>。
+     * 只在"既没缓存、又没配默认库"时才返回 null。</p>
+     */
     public Long route(String question) {
         if (question == null || question.isBlank()) return null;
         ensureReady();
+
         if (kbVectors.isEmpty()) {
-            log.warn(">>> 知识库向量缓存为空，跳过路由，将由调用方走默认知识库");
+            // ★ 缓存为空：优先用兜底库，而不是返回 null 让工具报错
+            Long fallback = parseId(defaultKbId);
+            if (fallback != null) {
+                log.warn(">>> 知识库向量缓存为空（可能是 projectId 配错或 embedding 不可用），"
+                        + "使用兜底知识库 {} —— 建议检查 KnowledgeRouter.diagnose()", fallback);
+                return fallback;
+            }
+            log.warn(">>> 知识库向量缓存为空且未配置 ai.knowledge-router.default-kb-id，路由失败");
             return null;
         }
+
+        // ★ 只有一个知识库时无需路由：任何问题都只能查它，
+        //   做相似度判断只会因为短问题（如"审核人是谁"）得分低而误判为"无知识库"。
+        if (kbVectors.size() == 1) {
+            Long only = kbVectors.keySet().iterator().next();
+            log.info(">>> 仅一个知识库 {}，跳过相似度路由", only);
+            return only;
+        }
+
         float[] questionVec = embeddingModel.embed(question).content().vector();
 
         Long bestKbId = null;
@@ -215,9 +258,11 @@ public class KnowledgeRouter {
         }
 
         log.info(">>> 路由结果：knowledgeBaseId={}, score={}", bestKbId, bestScore);
-        if (bestScore < MIN_SCORE) {
-            log.warn(">>> 路由相似度低于阈值 {}，不选知识库", MIN_SCORE);
-            return null;
+        if (bestScore < minScore) {
+            // ★ 原实现直接返回 null，导致工具报"无法判断知识库"、模型转而反问用户。
+            //   改为：仍返回最相似的那个（宁可查错库，也别不查）。
+            log.warn(">>> 路由相似度 {} 低于阈值 {}，仍返回最相近知识库 {}",
+                    bestScore, minScore, bestKbId);
         }
         return bestKbId;
     }
@@ -276,10 +321,65 @@ public class KnowledgeRouter {
             base.setProjectId(projectId);
             base.setItCode(itCode);
             List<Long> ids = knowledgeService.queryKnowledgeBase(base);
-            return ids == null ? new ArrayList<>() : ids;
+            if (ids == null || ids.isEmpty()) {
+                // ★ 升为 WARN：这是"知识库永远查不到"的头号原因。
+                //   projectId / itCode 配错时，列表为空 → kbVectors 恒空
+                //   → route() 恒返回 null → 工具报"无法判断知识库" → 模型反问用户。
+                log.warn(">>> 查询知识库列表为空！请检查配置 ai.knowledge-router.project-id={}, "
+                                + "ai.knowledge-router.it-code={} 是否正确（projectId 默认 79 是硬编码遗留值）",
+                        projectId, itCode);
+                return new ArrayList<>();
+            }
+            log.info(">>> 查询到 {} 个知识库: {}", ids.size(), ids);
+            return ids;
         } catch (Exception e) {
-            log.warn("查询知识库列表失败", e);
+            log.error(">>> 查询知识库列表失败! projectId={}, itCode={}", projectId, itCode, e);
             return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 输出当前状态，便于排查"知识库查不到"类问题。
+     *
+     * <p>建议在项目启动后手动调用一次，或在定时任务里定期打印。
+     * 典型用法：在任意 Controller / Runner 注入 KnowledgeRouter 后调用本方法打日志。</p>
+     *
+     * @return 人类可读的状态摘要
+     */
+    public String diagnose() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n========== KnowledgeRouter 诊断 ==========\n");
+        sb.append("projectId=").append(projectId)
+                .append("  (配置: ai.knowledge-router.project-id)\n");
+        sb.append("itCode=").append(itCode)
+                .append("  (配置: ai.knowledge-router.it-code)\n");
+        sb.append("minScore=").append(minScore)
+                .append("  (配置: ai.knowledge-router.min-score)\n");
+        sb.append("缓存知识库数量=").append(kbVectors.size()).append("\n");
+
+        if (kbVectors.isEmpty()) {
+            sb.append("❌ 向量缓存为空 —— 路由将永远失败！\n");
+            sb.append("   可能原因：\n");
+            sb.append("   1. projectId 配置错误（查不到知识库列表）\n");
+            sb.append("   2. embedding 服务不可用\n");
+            sb.append("   3. 后台刷新尚未完成（等待下一轮，间隔 ")
+                    .append(refreshMinutes).append(" 分钟）\n");
+        } else {
+            sb.append("✅ 向量缓存正常，已加载知识库: ").append(kbVectors.keySet()).append("\n");
+        }
+        sb.append("==========================================\n");
+        return sb.toString();
+    }
+
+    /** 解析兜底知识库 ID（空/非法返回 null） */
+    private Long parseId(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String s = raw.trim();
+        try {
+            return Long.parseLong(s);
+        } catch (NumberFormatException e) {
+            log.warn(">>> ai.knowledge-router.default-kb-id 配置非法: {}（需为纯数字）", s);
+            return null;
         }
     }
 
