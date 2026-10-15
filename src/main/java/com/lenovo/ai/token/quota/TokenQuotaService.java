@@ -13,6 +13,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -36,11 +37,11 @@ public class TokenQuotaService {
             return QuotaStatus.exceeded(userId, quota.tier(), "账户已禁用");
         }
 
-        String dayKey = TokenRedisKeys.usageDay(userId);
-        String monthKey = TokenRedisKeys.usageMonth(userId);
-        String costDayKey = TokenRedisKeys.costDay(userId);
-        String costMonthKey = TokenRedisKeys.costMonth(userId);
-
+        LocalDate today = LocalDate.now();
+        String dayKey = TokenRedisKeys.usageDay(userId, today);
+        String monthKey = TokenRedisKeys.usageMonth(userId, today);
+        String costDayKey = TokenRedisKeys.costDay(userId, today);
+        String costMonthKey = TokenRedisKeys.costMonth(userId, today);
         // ★ pipeline：一次往返取 4 个值
         List<Object> results = redis.executePipelined((RedisCallback<Object>) connection -> {
             connection.hGetAll(dayKey.getBytes(StandardCharsets.UTF_8));

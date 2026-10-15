@@ -12,7 +12,8 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 /**
  * 按 itCode 查询联想员工信息。
  * <p>当用户问"laijf2 是谁"、"wang 的部门"、"laijf2 的上级"时调用。</p>
@@ -24,6 +25,10 @@ public class QueryUserInfoTool implements AiTool {
 
     private final LenovoService lenovoService;
 
+
+    /** 与 AiAgentRunner.ITCODE_PATTERN 一致：字母开头，4~20 位字母数字 */
+    private static final Pattern ITCODE_PATTERN =
+            Pattern.compile("\\b([a-zA-Z][a-zA-Z0-9]{3,19})\\b");
     @Override
     public String name() {
         return "query_user_info";
@@ -63,12 +68,20 @@ public class QueryUserInfoTool implements AiTool {
             return ToolResult.fail("itCode 不能为空");
         }
 
-        // ★ 清洗参数：LLM 可能把"lidd8 是谁"整句传进来
-        String itCode = String.valueOf(raw).trim()
-                .replaceAll("[^a-zA-Z0-9]", "");
-        if (itCode.isBlank()) {
-            return ToolResult.fail("itCode 不能为空");
-        }
+    // ★ P2 修复：原用 replaceAll("[^a-zA-Z0-9]", "") 会把"查 laijf8"变成"lajf8"，
+    //   itCode 被改。改用正则提取第一个合法 itCode。
+            String rawStr = String.valueOf(raw).trim();
+            String itCode;
+            Matcher m = ITCODE_PATTERN.matcher(rawStr);
+            if (m.find()) {
+                itCode = m.group(1);
+            } else {
+                // 兜底：如果正则没匹配到（比如纯数字工号），保留原始清洗结果
+                itCode = rawStr.replaceAll("[^a-zA-Z0-9]", "");
+            }
+            if (itCode.isBlank()) {
+                return ToolResult.fail("itCode 不能为空");
+            }
 
         try {
             // ① 原样查

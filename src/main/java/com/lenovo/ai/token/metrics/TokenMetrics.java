@@ -6,7 +6,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -40,8 +39,10 @@ public class TokenMetrics {
     }
 
     private Counter counter(String name, String... tags) {
-        // ★ 用 List.hashCode 生成 key，避免 tag 值包含 '|' 或 '=' 时冲突
-        String key = name + ":" + Arrays.hashCode(tags);
+        // ★ P2 修复：原用 Arrays.hashCode(tags) 作 key，32 位 hash 有碰撞风险，
+        //   不同 tags 组可能命中同一 Counter，导致指标串号。
+        //   改用完整 tags 拼接，无碰撞。
+        String key = name + "|" + String.join("\u0001", tags);
         return cache.computeIfAbsent(key, k -> {
             Counter.Builder b = Counter.builder(name);
             for (int i = 0; i < tags.length; i += 2) {

@@ -15,6 +15,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -43,6 +44,9 @@ public class RedisTokenCounter implements TokenCounter {
         if (!properties.isEnabled() || usage == null || usage.totalTokens() <= 0) return;
 
         try {
+            // ★ P2 修复：统一取一次 now，所有 key 用它，避免跨午夜归属不一致
+            LocalDate today = LocalDate.now();
+
             double cost = costCalculator.calculate(modelName, usage);
             long costMicro = Math.round(cost * TokenRedisKeys.MICRO_CNY);
 
@@ -59,12 +63,13 @@ public class RedisTokenCounter implements TokenCounter {
                     .build();
             String recJson = objectMapper.writeValueAsString(rec);
 
-            String dayKey   = TokenRedisKeys.usageDay(userId);
-            String monthKey = TokenRedisKeys.usageMonth(userId);
-            String modelKey = TokenRedisKeys.modelDay(userId);
-            String costDay  = TokenRedisKeys.costDay(userId);
-            String costMon  = TokenRedisKeys.costMonth(userId);
-            String recKey   = TokenRedisKeys.recordsDay(userId);
+            // ★ 全部用 today
+            String dayKey   = TokenRedisKeys.usageDay(userId, today);
+            String monthKey = TokenRedisKeys.usageMonth(userId, today);
+            String modelKey = TokenRedisKeys.modelDay(userId, today);
+            String costDay  = TokenRedisKeys.costDay(userId, today);
+            String costMon  = TokenRedisKeys.costMonth(userId, today);
+            String recKey   = TokenRedisKeys.recordsDay(userId, today);
 
             List<Object> results = redis.executePipelined((RedisCallback<Object>) connection -> {
                 byte[] dayKeyB   = dayKey.getBytes(StandardCharsets.UTF_8);
@@ -95,7 +100,6 @@ public class RedisTokenCounter implements TokenCounter {
                 return null;
             });
 
-            // ★ 检查 pipeline 里是否混入异常
             if (results != null) {
                 for (int i = 0; i < results.size(); i++) {
                     Object r = results.get(i);
@@ -105,7 +109,6 @@ public class RedisTokenCounter implements TokenCounter {
                 }
             }
 
-            // ★ 上报指标（失败不影响主流程）
             try {
                 tokenMetrics.recordUsage(userId, modelName, usage, cost);
             } catch (Exception me) {

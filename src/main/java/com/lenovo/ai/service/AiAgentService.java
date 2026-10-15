@@ -80,8 +80,10 @@ public class AiAgentService {
             if (oldRequestId != null && !oldRequestId.equals(requestId)) {
                 RequestState oldState = requestsById.remove(oldRequestId);
                 if (oldState != null) {
-                    // ★ 用 remove(key, value) 语义 + 用 sessionId 当 key
-                    activeBySession.remove(sessionId, oldState);
+                    // ★ P2 修复：用 oldState.sessionId，与 cleanup 一致
+                    if (oldState.sessionId != null) {
+                        activeBySession.remove(oldState.sessionId, oldState);
+                    }
                     try {
                         redisLockHelper.forceUnlock(oldState.lockKey);
                     } catch (Exception e) {
@@ -111,7 +113,7 @@ public class AiAgentService {
             boolean locked = redisLockHelper.tryLock(lockKey, lockToken, 300_000L);
             if (!locked) {
                 log.error(">>> 锁冲突: memoryId={}", memoryId);
-                cleanup(requestId, sessionId);
+                cleanup(requestId);
                 try {
                     emitter.send(SseEmitter.event().name("error")
                             .data(Map.of("message", "上一次请求尚未完成，请稍后再试")));
@@ -132,7 +134,7 @@ public class AiAgentService {
 
             // 6. 生命周期回调
             emitter.addCloseCallback(() -> {
-                cleanup(requestId, sessionId);
+                cleanup(requestId);
                 log.debug(">>> emitter close: requestId={}", requestId);
             });
 
@@ -148,7 +150,7 @@ public class AiAgentService {
             if (!accepted) {
                 log.error(">>> 线程池已满，请求被拒绝: memoryId={}, requestId={}",
                         memoryId, requestId);
-                cleanup(requestId, sessionId);
+                cleanup(requestId);
                 try {
                     emitter.send(SseEmitter.event().name("error")
                             .data(Map.of("message", "系统繁忙，请稍后再试")));
@@ -161,7 +163,7 @@ public class AiAgentService {
 
         } catch (Exception e) {
             log.error("chat() 入口异常", e);
-            cleanup(requestId, sessionId);
+            cleanup(requestId);
             try {
                 emitter.send(SseEmitter.event().name("error")
                         .data(Map.of("message", "系统繁忙，请稍后再试")));
@@ -237,14 +239,13 @@ public class AiAgentService {
      * 避免把已经被新请求覆盖的条目误删。</p>
      *
      * @param requestId 请求 ID
-     * @param sessionId 会话 ID（activeBySession 的 key）
      */
-    private void cleanup(String requestId, String sessionId) {
+    private void cleanup(String requestId) {
         RequestState state = requestsById.remove(requestId);
         if (state != null) {
             activeByMemory.remove(state.memoryId, state.requestId);
-            if (sessionId != null) {
-                activeBySession.remove(sessionId, state);
+            if (state.sessionId != null) {
+                activeBySession.remove(state.sessionId, state);   // ← 用 state.sessionId
             }
         }
     }

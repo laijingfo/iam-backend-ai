@@ -44,7 +44,13 @@ public class QueryKnowledgeTool implements AiTool {
     private final KnowledgeTemplateRegistry templateRegistry;
     private final KnowledgeRegistrar knowledgeRegistrar;
     private final KnowledgeRouter knowledgeRouter;
-
+    private static final String MSG_KB_MISS         = "知识库中未找到相关答案。";
+    private static final String MSG_KB_INVALID_ID   = "无法定位知识库，请稍后再试。";
+    private static final String MSG_KB_LOAD_FAIL    = "无法加载该知识库，请稍后再试。";
+    private static final String MSG_KB_NOT_FOUND    = "未找到相关知识库。";
+    private static final String MSG_KB_INCOMPLETE   = "该知识库配置不完整，暂时无法检索。";
+    private static final String MSG_KB_ROUTE_FAIL   = "知识库服务暂不可用（路由未就绪），请稍后重试。";
+    private static final String MSG_KB_RESULT_HEAD  = "以下是与问题相关的内容：\n";
     @Override
     public String name() { return "query_knowledge"; }
 
@@ -90,16 +96,13 @@ public class QueryKnowledgeTool implements AiTool {
             kbId = null;
         }
         // ★ 不再检查 templateRegistry，交给 queryOne 懒加载
-
         if (kbId == null) {
-            // ★ 兜底统一由 KnowledgeRouter.route() 处理（单库直返 / 默认库 / 最优库）。
-            //   走到这里的 null 意味着"既没向量缓存、又没配默认库"，属配置问题。
             kbId = knowledgeRouter.route(question);
             if (kbId == null) {
                 log.error("[query_knowledge] 知识库路由失败！"
                         + "请检查 ai.knowledge-router.project-id / default-kb-id 配置，"
                         + "并调用 KnowledgeRouter.diagnose() 查看状态");
-                return ToolResult.ok("知识库服务暂不可用（路由未就绪），请稍后重试。");
+                return ToolResult.ok(MSG_KB_ROUTE_FAIL);
             }
             log.info("[query_knowledge] 自动路由到知识库 {}", kbId);
         }
@@ -135,7 +138,7 @@ public class QueryKnowledgeTool implements AiTool {
     private String queryOne(Long knowledgeBaseId, String question, Integer overrideTopK) {
         String knowledgeId = String.valueOf(knowledgeBaseId);
         if (knowledgeId.length() < MIN_KB_ID_LENGTH || !knowledgeId.matches("\\d+")) {
-            return "无法定位知识库，请稍后再试。";
+            return MSG_KB_INVALID_ID;
         }
 
         KnowledgeBase template = templateRegistry.get(knowledgeId);
@@ -145,10 +148,10 @@ public class QueryKnowledgeTool implements AiTool {
                 template = templateRegistry.get(knowledgeId);
             } catch (Exception e) {
                 log.warn("注册知识库失败: {}", knowledgeId, e);
-                return "无法加载该知识库，请稍后再试。";
+                return MSG_KB_LOAD_FAIL;
             }
         }
-        if (template == null) return "未找到相关知识库。";
+        if (template == null) return MSG_KB_NOT_FOUND;
 
         KnowledgeBase kb = copyTemplate(template);
         kb.setQuery(question);
@@ -157,7 +160,7 @@ public class QueryKnowledgeTool implements AiTool {
                 || kb.getRelation() == null || kb.getRelation().isEmpty()
                 || kb.getRelation().get(0).getEmbedding() == null) {
             log.warn("[query_knowledge] kb={} 配置不完整", knowledgeId);
-            return "该知识库配置不完整，暂时无法检索。";
+            return MSG_KB_INCOMPLETE;
         }
         if (kb.getIndexMode() == null) kb.setIndexMode("vector");
         if (overrideTopK != null) {
@@ -167,7 +170,7 @@ public class QueryKnowledgeTool implements AiTool {
         }
 
         JSONArray arr = knowledgeService.queryAnswer(kb);
-        if (arr == null || arr.isEmpty()) return "知识库中未找到相关答案。";
+        if (arr == null || arr.isEmpty()) return MSG_KB_MISS;
 
         StringBuilder sb = new StringBuilder();
         int n = Math.min(arr.size(), MAX_RESULT_ITEMS);
@@ -179,23 +182,27 @@ public class QueryKnowledgeTool implements AiTool {
             if (text.length() > MAX_TEXT_LEN) text = text.substring(0, MAX_TEXT_LEN) + "...";
             sb.append("- ").append(text).append("\n");
         }
-        if (sb.length() == 0) return "知识库中未找到相关答案。";
-        return "以下是与问题相关的内容：\n" + sb;
+        if (sb.length() == 0) return MSG_KB_MISS;
+        return MSG_KB_RESULT_HEAD + sb;
     }
 
     /**
      * 判断检索结果是否为"没查到"。
-     * <p>集中判断，避免各处硬编码字符串比较。</p>
+     *
+     * <p>★ P2：从 startsWith 改为 equals。因为所有文案已抽成常量，
+     * 返回的就是完整字符串（成功路径有 {@link #MSG_KB_RESULT_HEAD} 前缀），
+     * equals 更精确，不会误判成功路径。</p>
      */
     private boolean isMiss(String content) {
         if (content == null) return true;
         String c = content.trim();
         if (c.isEmpty()) return true;
-        return c.startsWith("知识库中未找到")
-                || c.startsWith("无法定位")
-                || c.startsWith("无法加载")
-                || c.startsWith("未找到相关")
-                || c.startsWith("该知识库配置不完整");
+        return c.equals(MSG_KB_MISS)
+                || c.equals(MSG_KB_INVALID_ID)
+                || c.equals(MSG_KB_LOAD_FAIL)
+                || c.equals(MSG_KB_NOT_FOUND)
+                || c.equals(MSG_KB_INCOMPLETE)
+                || c.equals(MSG_KB_ROUTE_FAIL);
     }
 
     private KnowledgeBase copyTemplate(KnowledgeBase src) {

@@ -8,9 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -89,10 +87,20 @@ public class MemoryParser {
                 .peek(this::normalizeItem)
                 .collect(Collectors.toList());
 
-        log.info(">>> [记忆抽取] 完成, 原始条数={}, 有效条数={}, items={}",
-                items.size(), valid.size(), valid);
+        // ★ P2 修复：同一轮内按 (type, content) 去重。
+        //   LLM 偶尔会返回重复项（尤其抽多条时），依赖 UserMemoryStore 的 setIfAbsent
+        //   去重是"跨轮"的兜底；同一轮内先去掉，减少无效写入。
+        Map<String, Map<String, Object>> deduped = new LinkedHashMap<>();
+        for (Map<String, Object> it : valid) {
+            String key = it.get("type") + "\u0001" + it.get("content");
+            deduped.putIfAbsent(key, it);
+        }
+        List<Map<String, Object>> result = new ArrayList<>(deduped.values());
 
-        return valid;
+        log.info(">>> [记忆抽取] 完成, 原始条数={}, 有效条数={}, 去重后={}, items={}",
+                items.size(), valid.size(), result.size(), result);
+
+        return result;
     }
 
     /** 兼容旧 API：返回 JSON 字符串 */

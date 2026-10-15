@@ -101,9 +101,16 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
     /** 内部字段：RediSearch 返回的 Redis key */
     private static final String FIELD_REDIS_KEY   = "__redisKey";
 
-    @Value("${langchain4j.memory.knn.score-is-distance:true}")
+    @Value("${ai.memory.knn.score-is-distance:true}")
     private boolean SCORE_IS_DISTANCE;
-
+    /**
+     * ★ P2：是否在 FT.SEARCH 里显式 RETURN 业务字段。
+     * <p>true = 只返回 userId/type/content，避免拉回 embedding（1024 维 ≈ 4KB/条）。
+     * false（默认）= 不带 RETURN，兼容早期 RediSearch 在 RETURN+KNN 下丢 score 的 bug。</p>
+     * <p>确认 RediSearch 版本 >= 2.6 后可设为 true。</p>
+     */
+    @Value("${ai.memory.knn.return-fields:false}")
+    private boolean knnReturnFields;
     /**
      * KNN 查询显式 RETURN 的字段列表。
      * <p>不包含 {@code id}：RediSearch 会通过 doc 顶层的 {@code id}（Redis key）自动携带。</p>
@@ -359,19 +366,16 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         args.add(b(query));
         args.add(b("PARAMS"));   args.add(b("2"));
         args.add(b("vec"));      args.add(qBytes);
-        // ★ R2 修复：显式 RETURN 只返回业务字段，避免拉回 embedding（1024 维 float32 ≈ 4KB/条）。
-        //
-        //   历史坑：早期 RediSearch 版本在 RETURN + KNN 组合下会丢 score 字段，
-        //   故本行曾被注释掉。现经测试环境验证：
-        //     - RediSearch 2.6+ 在 DIALECT 2 下 RETURN + KNN 能正常返回 score（在 extra_attributes 中）；
-        //     - 若线上仍遇到丢 score，回退方案是去掉 RETURN，并在 parseSearchHits 里
-        //       依赖 fieldsToMap 跳过 embedding（见下方过滤）。
-        //   放开 RETURN 后，单次 KNN 的网络传输量从 ~topK*4KB 降到 ~topK*0.5KB。
-//        args.add(b("RETURN"));
-//        args.add(b(String.valueOf(KNN_RETURN_FIELDS.length)));
-//        for (String f : KNN_RETURN_FIELDS) {
-//            args.add(b(f));
-//        }
+
+        // ★ P2：按配置决定是否显式 RETURN
+        if (knnReturnFields) {
+            args.add(b("RETURN"));
+            args.add(b(String.valueOf(KNN_RETURN_FIELDS.length)));
+            for (String f : KNN_RETURN_FIELDS) {
+                args.add(b(f));
+            }
+        }
+
         args.add(b("SORTBY"));   args.add(b(FIELD_SCORE));
         args.add(b("DIALECT"));  args.add(b("2"));
         args.add(b("LIMIT"));    args.add(b("0")); args.add(b(String.valueOf(topK)));

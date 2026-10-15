@@ -33,8 +33,7 @@ public class SummaryService {
     /**
      * 生成对话摘要。
      *
-     * @param sessionId   会话 ID，<b>必传</b>。用于隔离缓存 key，
-     *                    避免不同会话前缀相同时串号（不同用户看到别人的摘要）。
+     * @param sessionId   会话 ID，<b>必传</b>。用于隔离缓存 key。
      * @param messages    待摘要的历史消息
      * @param maxWordSize 摘要字数上限
      */
@@ -45,7 +44,7 @@ public class SummaryService {
                 .map(m -> m.role() + ": " + m.content())
                 .collect(Collectors.joining("\n"));
 
-        // ★ 只用前 N 条消息的 hash 作为缓存 key（前缀稳定）
+        // ★ 只用前 N 条消息的 hash 作为缓存 key（前缀稳定，避免每次新消息 key 全变）
         String prefix = messages.stream()
                 .limit(PREFIX_MESSAGES)
                 .map(m -> m.role() + ": " + m.content())
@@ -54,8 +53,17 @@ public class SummaryService {
             prefix = prefix.substring(0, PREFIX_MAX_CHARS);
         }
 
-        // ★ P0-1 修复：把 sessionId 纳入 key，避免不同会话前缀相同时跨会话串号。
-        String keySource = (sessionId == null ? "" : sessionId) + "|" + prefix;
+        // ★ P2 修复：key 里纳入最后一条消息的内容 hash。
+        //   原 key = sessionId + 前5条hash + :len{size}，若历史被外部修改（编辑/删除）
+        //   导致 size 不变、内容变，会命中旧缓存。
+        //   纳入末尾内容后，任何内容变化都会换 key。
+        Message lastMsg = messages.get(messages.size() - 1);
+        String lastContent = lastMsg.content() == null ? "" : lastMsg.content();
+        String keySource = (sessionId == null ? "" : sessionId)
+                + "|" + prefix
+                + "|" + messages.size()
+                + "|" + lastMsg.role()
+                + "|" + DigestUtils.md5(lastContent);
         String cacheKey = CACHE_PREFIX + DigestUtils.md5(keySource)
                 + ":len" + messages.size();
 
@@ -75,15 +83,15 @@ public class SummaryService {
         }
 
         String prompt = """
-            请把以下对话压缩成简洁摘要，保留：
-            1. 用户的关键诉求和已确认的事实
-            2. 已经执行过的操作及其结果
-            3. 尚未解决的问题
-            忽略寒暄和重复内容。控制在 %d 字以内，直接输出摘要内容。
-            
-            对话：
-            %s
-            """.formatted(maxWordSize, raw);
+        请把以下对话压缩成简洁摘要，保留：
+        1. 用户的关键诉求和已确认的事实
+        2. 已经执行过的操作及其结果
+        3. 尚未解决的问题
+        忽略寒暄和重复内容。控制在 %d 字以内，直接输出摘要内容。
+        
+        对话：
+        %s
+        """.formatted(maxWordSize, raw);
 
         String summary = TextUtils.stripCodeFence(llmClient.chatSimple(prompt));
         if (summary == null || summary.isBlank()) {

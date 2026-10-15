@@ -14,9 +14,6 @@ mail:
 
 
 langchain4j:
-  memory:
-    knn:
-      score-is-distance: true
   open-ai:
     # LangChain4jConfig 的 @Value 读取（starter 自身配置在各模型块下）
     base-url: https://ws-h0yse1g5h37z1f9s.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
@@ -66,7 +63,10 @@ ai:
     default-top-k: 10
     # ★ 改为服务账号，禁止个人 itCode
     it-code: ${KB_IT_CODE:laijf2}
-
+  memory:
+    knn:
+      return-fields: false   # 确认 RediSearch >= 2.6 后可改 true
+      score-is-distance: true
 token:
   enabled: true
   default-tier: FREE
