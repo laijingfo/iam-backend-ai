@@ -341,32 +341,31 @@ public class AiAgentRunner {
         return sb.toString();
     }
 
-    // =====================================================================
-    //  ② 输入里提到的其他用户（lidd8 等）
-    // =====================================================================
-
     /**
      * 扫描用户输入，识别 itCode，调 Lenovo 接口拿信息，拼成"提及用户"卡片。
-     * <p>排除当前登录用户自己；最多查 MAX_MENTIONED_USERS 个。</p>
+     * <p>排除当前登录用户自己；最多尝试 MAX_MENTIONED_USERS 次。</p>
      */
     private String buildMentionedUserBlock(String message, String currentUserId) {
         if (message == null || message.isBlank()) return "";
 
-        // 1. 识别候选 itCode
         Set<String> candidates = extractItCodes(message);
         if (candidates.isEmpty()) return "";
 
-        // 2. 排除当前登录用户自己
         if (currentUserId != null) {
             candidates.remove(currentUserId);
         }
         if (candidates.isEmpty()) return "";
 
-        // 3. 逐个查 Lenovo 接口
         StringBuilder sb = new StringBuilder("[用户提到的其他用户]\n");
         int hit = 0;
+        // ★ R5 修复：原实现"最多命中 MAX_MENTIONED_USERS 个"，
+        //   会导致输入里 N 个候选、前 N 个查不到时，逐个查到第 N+1 个才 hit=1，
+        //   最终可能调用 getUserInfoByItCode 达 10 次。
+        //   改为"最多尝试 MAX_MENTIONED_USERS 次"。
+        int attempted = 0;
         for (String itCode : candidates) {
-            if (hit >= MAX_MENTIONED_USERS) break;
+            if (attempted >= MAX_MENTIONED_USERS) break;
+            attempted++;
             try {
                 LenovoUser user = lenovoService.getUserInfoByItCode(itCode);
                 if (user == null) {

@@ -145,10 +145,19 @@ public class AgentLoop {
                 // ==================================================
                 // ★ LLM 调用失败：不再静默成空答案
                 // ==================================================
+                // ==================================================
+                // ★ LLM 调用失败：不再静默成空答案
+                // ==================================================
                 if (resp.isFailed()) {
                     Throwable cause = resp.error();
-                    log.error(">>> LLM 调用失败, runId={}, agent={}, step={}",
-                            ctx.runId(), ctx.agentName(), step, cause);
+                    // ★ R4 补充：失败响应可能携带已解析出的 toolCalls，
+                    //   仅记录用于诊断，不执行（失败意味着本次调用不可靠）。
+                    log.error(">>> LLM 调用失败, runId={}, agent={}, step={}, " +
+                                    "已解析 toolCalls={}, 已产出内容长度={}",
+                            ctx.runId(), ctx.agentName(), step,
+                            resp.toolCalls() == null ? 0 : resp.toolCalls().size(),
+                            resp.content() == null ? 0 : resp.content().length(),
+                            cause);
                     sendEvent(ctx.emitter(), "error", Map.of(
                             "code", "LLM_ERROR",
                             "message", "模型调用失败: "

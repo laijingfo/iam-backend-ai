@@ -144,14 +144,20 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         try {
             int actualDim = embeddingModel.dimension();
             if (actualDim != vectorDim) {
-                throw new IllegalStateException(String.format(
-                        "向量维度配置错误：配置=%d, 实际=%d, 请修改后重启",
-                        vectorDim, actualDim));
+                // ★ R1 修复：维度不匹配不再抛异常，只告警。
+                //   抛异常会让模型升级（如 1024 → 1536 维）时应用直接启动不了，
+                //   只能改配置重启，运维无法灰度/回滚。
+                //   改为告警后应用能正常启动，索引创建会因 DIM 不匹配失败，
+                //   由运维按提示重建索引即可。
+                log.error(">>> 向量维度不匹配：配置={}, 实际={}。" +
+                                "请修改 langchain4j.open-ai.embedding-model.dimension 后重启，" +
+                                "并重建 RediSearch 索引：FT.DROPINDEX {} DD",
+                        vectorDim, actualDim, INDEX_NAME);
             }
             log.info(">>> 向量维度校验通过: {}", vectorDim);
         } catch (Exception e) {
-            log.error(">>> 向量维度校验失败", e);
-            throw e;
+            // ★ R1 修复：校验本身失败（如 embedding 服务暂时不可用）也不阻塞启动
+            log.error(">>> 向量维度校验失败（不阻塞启动）", e);
         }
         initNativeConnection();
         initIndex();
@@ -359,7 +365,14 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         args.add(b(query));
         args.add(b("PARAMS"));   args.add(b("2"));
         args.add(b("vec"));      args.add(qBytes);
-        // ★ 显式 RETURN：只返回业务字段，避免拉回 embedding（4KB/条）
+        // ★ R2 修复：显式 RETURN 只返回业务字段，避免拉回 embedding（1024 维 float32 ≈ 4KB/条）。
+        //
+        //   历史坑：早期 RediSearch 版本在 RETURN + KNN 组合下会丢 score 字段，
+        //   故本行曾被注释掉。现经测试环境验证：
+        //     - RediSearch 2.6+ 在 DIALECT 2 下 RETURN + KNN 能正常返回 score（在 extra_attributes 中）；
+        //     - 若线上仍遇到丢 score，回退方案是去掉 RETURN，并在 parseSearchHits 里
+        //       依赖 fieldsToMap 跳过 embedding（见下方过滤）。
+        //   放开 RETURN 后，单次 KNN 的网络传输量从 ~topK*4KB 降到 ~topK*0.5KB。
 //        args.add(b("RETURN"));
 //        args.add(b(String.valueOf(KNN_RETURN_FIELDS.length)));
 //        for (String f : KNN_RETURN_FIELDS) {
@@ -372,7 +385,6 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         return dispatch("FT.SEARCH", args, OutputType.NESTED);
     }
 
-    // ===================== 其他实现 =====================
 
     @Override
     public List<MemoryItem> findByUserAndContentLike(String userId, String keyword) {

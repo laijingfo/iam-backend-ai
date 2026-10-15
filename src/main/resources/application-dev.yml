@@ -63,6 +63,9 @@ ai:
     retry-backoff-millis: 60000
     project-id: 79        # ★ 别再用默认 79
     default-kb-id: 739418572585797   # ★ 强烈建议，等于给检索上保险
+    default-embedding: Qwen3-Embedding-0.6B
+    default-top-k: 10
+    it-code: laijf2
 
 token:
   enabled: true

@@ -5,6 +5,7 @@ import com.lenovo.bean.knowledge.KnowledgeBase;
 import com.lenovo.bean.knowledge.KnowledgeRelation;
 import com.lenovo.bean.knowledge.ProjectBase;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -24,11 +25,20 @@ public class KnowledgeRegistrar {
     private final KnowledgeService knowledgeService;
     private final KnowledgeTemplateRegistry templateRegistry;
 
-    private static final Integer DEFAULT_PROJECT_ID = 79;
-    private static final String DEFAULT_IT_CODE = "laijf2";
-    private static final String DEFAULT_EMBEDDING = "Qwen3-Embedding-0.6B";
     private static final String DEFAULT_INDEX_MODE = "vector";
-    private static final Integer DEFAULT_TOP_K = 10;
+
+    // ★ R7 修复：与 KnowledgeRouter 使用同一份配置，避免换环境时一个能查到、一个查不到。
+    @Value("${ai.knowledge-router.project-id:79}")
+    private Integer projectId;
+
+    @Value("${ai.knowledge-router.it-code:laijf2}")
+    private String itCode;
+
+    @Value("${ai.knowledge-router.default-embedding:Qwen3-Embedding-0.6B}")
+    private String defaultEmbedding;
+
+    @Value("${ai.knowledge-router.default-top-k:10}")
+    private Integer defaultTopK;
 
     public void register(String knowledgeId) {
         if (knowledgeId == null || knowledgeId.isBlank()) return;
@@ -42,8 +52,8 @@ public class KnowledgeRegistrar {
         }
 
         ProjectBase projectBase = new ProjectBase();
-        projectBase.setProjectId(DEFAULT_PROJECT_ID);
-        projectBase.setItCode(DEFAULT_IT_CODE);
+        projectBase.setProjectId(projectId);
+        projectBase.setItCode(itCode);
 
         List<Long> knowledgeBaseIds = knowledgeService.queryKnowledgeBase(projectBase);
         if (knowledgeBaseIds == null || !knowledgeBaseIds.contains(knowledgeBaseId)) {
@@ -53,15 +63,15 @@ public class KnowledgeRegistrar {
 
         KnowledgeRelation relation = new KnowledgeRelation();
         relation.setKnowledgeBaseId(knowledgeBaseId);
-        relation.setEmbedding(DEFAULT_EMBEDDING);
+        relation.setEmbedding(defaultEmbedding);
 
         List<KnowledgeRelation> relationList = new ArrayList<>();
         relationList.add(relation);
 
         KnowledgeBase knowledgeBase = new KnowledgeBase();
-        knowledgeBase.setProjectId(DEFAULT_PROJECT_ID);
+        knowledgeBase.setProjectId(projectId);
         knowledgeBase.setRelation(relationList);
-        knowledgeBase.setSimilarityTopK(DEFAULT_TOP_K);
+        knowledgeBase.setSimilarityTopK(defaultTopK);
         knowledgeBase.setIndexMode(DEFAULT_INDEX_MODE);
 
         templateRegistry.put(knowledgeId, knowledgeBase);

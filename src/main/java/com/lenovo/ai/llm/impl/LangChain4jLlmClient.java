@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 
 @Slf4j
 @Component
@@ -106,6 +107,7 @@ public class LangChain4jLlmClient implements LlmClient {
     }
 
     /** 实际执行流式调用 */
+    /** 实际执行流式调用 */
     private LlmResponse doStream(List<Message> messages, List<ToolSpec> tools,
                                  AiChatSseEmitter emitter, String modelName) {
         List<ChatMessage> chatMessages = toChatMessages(messages);
@@ -115,7 +117,7 @@ public class LangChain4jLlmClient implements LlmClient {
         if (!toolSpecs.isEmpty()) {
             requestBuilder.toolSpecifications(toolSpecs);
         }
-        // ★ 修复：让 ModelRouter 的选择真正生效（原实现从未设置 modelName）
+        // ★ 让 ModelRouter 的选择真正生效（原实现从未设置 modelName）
         if (modelName != null && !modelName.isBlank()) {
             requestBuilder.modelName(modelName);
         }
@@ -125,8 +127,10 @@ public class LangChain4jLlmClient implements LlmClient {
         StringBuilder fullContent = new StringBuilder();
         List<ToolExecutionRequest> toolRequests = new ArrayList<>();
 
-        // ★ usage 累积容器（在回调里填，主线程读取）
-        final int[] usageHolder = new int[]{0, 0, 0, 0};
+        // ★ R3 修复：usageHolder 用 AtomicIntegerArray，避免 onComplete/onError
+        //   在极端并发下读写 int[] 的可见性问题（虽然流式回调通常串行，
+        //   但不同的 LangChain4j 实现不保证）。
+        final AtomicIntegerArray usageHolder = new AtomicIntegerArray(4);
 
         streamingModel.chat(request, new StreamingChatResponseHandler() {
             @Override
@@ -145,20 +149,18 @@ public class LangChain4jLlmClient implements LlmClient {
                         toolRequests.addAll(aiMessage.toolExecutionRequests());
                     }
 
-                    // ★ 提取 token usage
                     TokenUsage tu = completeResponse.tokenUsage();
                     if (tu != null) {
-                        usageHolder[0] = tu.inputTokenCount() == null ? 0 : tu.inputTokenCount();
-                        usageHolder[1] = tu.outputTokenCount() == null ? 0 : tu.outputTokenCount();
-                        usageHolder[2] = tu.totalTokenCount() == null ? 0 : tu.totalTokenCount();
-
-                        // ★ 提取 cachedTokens
-                        usageHolder[3] = extractCachedTokens(completeResponse);
+                        usageHolder.set(0, tu.inputTokenCount() == null ? 0 : tu.inputTokenCount());
+                        usageHolder.set(1, tu.outputTokenCount() == null ? 0 : tu.outputTokenCount());
+                        usageHolder.set(2, tu.totalTokenCount() == null ? 0 : tu.totalTokenCount());
+                        usageHolder.set(3, extractCachedTokens(completeResponse));
                     }
 
                     future.complete(toLlmResponse(
                             fullContent.toString(), toolRequests,
-                            usageHolder[0], usageHolder[1], usageHolder[2], usageHolder[3]));
+                            usageHolder.get(0), usageHolder.get(1),
+                            usageHolder.get(2), usageHolder.get(3)));
                 } catch (Exception e) {
                     future.completeExceptionally(e);
                 }
@@ -166,14 +168,12 @@ public class LangChain4jLlmClient implements LlmClient {
 
             @Override
             public void onError(Throwable error) {
-                // ★ 修复：原实现用 future.complete(...) 把失败当成"正常返回空内容"，
-                //   导致上游 5xx / 流中断最终表现为前端收到一条空白回复。
-                //   现改为返回 failed 响应，由 AgentLoop 走 error 分支（不落库、不发 done）。
                 log.error("StreamingChatResponseHandler onError, model={}", modelName, error);
                 future.complete(LlmResponse.failed(
                         fullContent.toString(),
                         toLlmResponse("", toolRequests,
-                                usageHolder[0], usageHolder[1], usageHolder[2], usageHolder[3]),
+                                usageHolder.get(0), usageHolder.get(1),
+                                usageHolder.get(2), usageHolder.get(3)),
                         error));
             }
         });
@@ -181,7 +181,6 @@ public class LangChain4jLlmClient implements LlmClient {
         try {
             return future.get(STREAM_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            // ★ 修复：超时同样不能静默成空答案
             log.error("chatStream 超时 {}s, model={}", STREAM_TIMEOUT_SECONDS, modelName);
             return LlmResponse.failed(fullContent.toString(), e);
         } catch (Exception e) {

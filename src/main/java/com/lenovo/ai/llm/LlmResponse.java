@@ -48,7 +48,7 @@ public record LlmResponse(
     }
 
     /**
-     * 失败响应（保留已产生的 usage，便于计费与排查）。
+     * 失败响应（保留已产生的 usage 与 toolCalls，便于计费与排查）。
      *
      * @param partialContent 失败前已流式产出的内容（可能为 ""）
      * @param usage          已统计到的 usage，可为 null
@@ -60,7 +60,11 @@ public record LlmResponse(
                     List.of(), 0, 0, 0, 0, error);
         }
         return new LlmResponse(partialContent == null ? "" : partialContent,
-                List.of(), usage.inputTokens(), usage.outputTokens(),
+                // ★ R4 修复：保留已解析出的 toolCalls，便于排查"工具调用完整但调用失败"的场景。
+                //   注意：AgentLoop 里 isFailed() 优先于 hasToolCalls()，
+                //   所以即使保留了 toolCalls 也不会被执行，仅作诊断信息。
+                usage.toolCalls() == null ? List.of() : usage.toolCalls(),
+                usage.inputTokens(), usage.outputTokens(),
                 usage.totalTokens(), usage.cachedTokens(), error);
     }
 

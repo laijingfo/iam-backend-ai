@@ -55,7 +55,8 @@ public class KnowledgeRouter {
 
     private final KnowledgeService knowledgeService;
     private final EmbeddingModel embeddingModel;
-
+    /** 问题 embedding 的超时（秒），超时后降级到兜底知识库 */
+    private static final int EMBED_TIMEOUT_SECONDS = 2;
     /**
      * 知识库所属项目 ID。
      * <p><b>修复</b>：原为硬编码 {@code 79}，不同环境（dev / test / prod）
@@ -226,7 +227,6 @@ public class KnowledgeRouter {
         ensureReady();
 
         if (kbVectors.isEmpty()) {
-            // ★ 缓存为空：优先用兜底库，而不是返回 null 让工具报错
             Long fallback = parseId(defaultKbId);
             if (fallback != null) {
                 log.warn(">>> 知识库向量缓存为空（可能是 projectId 配错或 embedding 不可用），"
@@ -237,15 +237,32 @@ public class KnowledgeRouter {
             return null;
         }
 
-        // ★ 只有一个知识库时无需路由：任何问题都只能查它，
-        //   做相似度判断只会因为短问题（如"审核人是谁"）得分低而误判为"无知识库"。
         if (kbVectors.size() == 1) {
             Long only = kbVectors.keySet().iterator().next();
             log.info(">>> 仅一个知识库 {}，跳过相似度路由", only);
             return only;
         }
 
-        float[] questionVec = embeddingModel.embed(question).content().vector();
+        // ★ R6 修复：给 embedding 加超时。
+        //   embedding 服务抖动时，route 会同步阻塞，拖垮整轮首字延迟。
+        //   超时后直接返回兜底知识库（若有），或最相近的库。
+        float[] questionVec;
+        try {
+            questionVec = CompletableFuture.supplyAsync(
+                            () -> embeddingModel.embed(question).content().vector(),
+                            refreshPool)
+                    .orTimeout(EMBED_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .join();
+        } catch (Exception e) {
+            log.warn(">>> 问题 embedding 超时或失败({}s)，降级到兜底知识库",
+                    EMBED_TIMEOUT_SECONDS, e);
+            Long fallback = parseId(defaultKbId);
+            if (fallback != null) return fallback;
+            // 没配兜底库：返回第一个缓存的知识库（宁可贵一点也不能不查）
+            Long any = kbVectors.keySet().iterator().next();
+            log.warn(">>> 未配置 default-kb-id，返回任意知识库 {}", any);
+            return any;
+        }
 
         Long bestKbId = null;
         double bestScore = -1;
@@ -259,8 +276,6 @@ public class KnowledgeRouter {
 
         log.info(">>> 路由结果：knowledgeBaseId={}, score={}", bestKbId, bestScore);
         if (bestScore < minScore) {
-            // ★ 原实现直接返回 null，导致工具报"无法判断知识库"、模型转而反问用户。
-            //   改为：仍返回最相似的那个（宁可查错库，也别不查）。
             log.warn(">>> 路由相似度 {} 低于阈值 {}，仍返回最相近知识库 {}",
                     bestScore, minScore, bestKbId);
         }

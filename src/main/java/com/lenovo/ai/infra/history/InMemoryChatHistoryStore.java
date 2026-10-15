@@ -32,7 +32,12 @@ public class InMemoryChatHistoryStore implements ChatHistoryStore {
                                LocalDateTime createdAt, LocalDateTime updatedAt) {}
 
     private final Map<String, SessionMeta> sessions = new ConcurrentHashMap<>();
-    private final Map<Long, StoredMessage> messages = new ConcurrentHashMap<>();
+
+    // ★ R8 修复：按 sessionId 分组存储，避免 load(sessionId) 全表扫描。
+    //   旧结构：Map<Long, StoredMessage>，每次 load 要遍历所有会话的所有消息。
+    //   新结构：Map<String sessionId, Map<Long msgId, StoredMessage>>，load 只遍历单个会话。
+    private final Map<String, Map<Long, StoredMessage>> sessionMessages = new ConcurrentHashMap<>();
+
     private final AtomicLong idGen = new AtomicLong(1);
 
     @Override
@@ -69,7 +74,8 @@ public class InMemoryChatHistoryStore implements ChatHistoryStore {
             LocalDateTime created = old != null ? old.createdAt() : now;
             return new SessionMeta(owner, title, created, now);
         });
-        messages.put(messageId, new StoredMessage(messageId, sessionId, userId, role, content, extra));
+        sessionMessages.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
+                .put(messageId, new StoredMessage(messageId, sessionId, userId, role, content, extra));
     }
 
     @Override
@@ -116,15 +122,24 @@ public class InMemoryChatHistoryStore implements ChatHistoryStore {
 
     @Override
     public String loadAssistant(long assistantMessageId) {
-        StoredMessage message = messages.get(assistantMessageId);
-        if (message == null || !"ASSISTANT".equalsIgnoreCase(message.role())) return "";
-        return message.content() == null ? "" : message.content();
+        // ★ R8 修复：辅助消息 ID 是全局唯一，需要遍历所有会话。
+        //   但 loadAssistant 调用频率低（每轮结束 1 次），可接受。
+        //   若未来成为瓶颈，可再加 Map<Long, String sessionId> 的反向索引。
+        for (Map<Long, StoredMessage> perSession : sessionMessages.values()) {
+            StoredMessage message = perSession.get(assistantMessageId);
+            if (message != null && "ASSISTANT".equalsIgnoreCase(message.role())) {
+                return message.content() == null ? "" : message.content();
+            }
+        }
+        return "";
     }
 
     @Override
     public List<Message> load(String sessionId) {
-        return messages.values().stream()
-                .filter(m -> sessionId.equals(m.sessionId()))
+        // ★ R8 修复：只遍历单个会话的消息
+        Map<Long, StoredMessage> perSession = sessionMessages.get(sessionId);
+        if (perSession == null || perSession.isEmpty()) return List.of();
+        return perSession.values().stream()
                 .sorted(Comparator.comparingLong(StoredMessage::id))
                 .map(this::toMessage)
                 .toList();
