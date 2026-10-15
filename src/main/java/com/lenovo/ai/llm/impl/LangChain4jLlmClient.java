@@ -228,19 +228,22 @@ public class LangChain4jLlmClient implements LlmClient {
     /**
      * 从响应中提取 cachedTokens。
      *
-     * <p>优先取 {@link CachedTokenListener} 在本次响应中捕获的值（并清除 ThreadLocal，
-     * 避免线程池复用导致数据串台与内存泄漏）；取不到再从响应 metadata / aiMessage
-     * attributes 里用 {@link CachedTokenExtractor} 兜底。</p>
+     * <p>★ P0-3 修复：优先从 {@code aiMessage.attributes()} 读取
+     * （由 {@link CachedTokenListener} 在同一次响应对象上写入，天然隔离）；
+     * 取不到再从响应 metadata / aiMessage attributes 里用
+     * {@link CachedTokenExtractor} 兜底。</p>
      */
     private int extractCachedTokens(ChatResponse response) {
         try {
-            // 路径 1：listener 捕获（★ getAndClear 会移除 ThreadLocal）
-            int fromListener = CachedTokenListener.getAndClear();
-            if (fromListener > 0) {
-                return fromListener;
+            // 路径 1：listener 写入 aiMessage.attributes
+            if (response.aiMessage() != null) {
+                int fromAttr = CachedTokenListener.readFrom(response.aiMessage());
+                if (fromAttr > 0) {
+                    return fromAttr;
+                }
             }
         } catch (Exception e) {
-            log.debug("读取 CachedTokenListener 失败", e);
+            log.debug("从 attributes 读取 cachedTokens 失败", e);
         }
 
         try {
@@ -250,7 +253,7 @@ public class LangChain4jLlmClient implements LlmClient {
                 int v = CachedTokenExtractor.extractFromNode(objectMapper.valueToTree(metadata));
                 if (v > 0) return v;
             }
-            // 路径 3：aiMessage attributes
+            // 路径 3：aiMessage attributes 反查（上游可能直接写了 prompt_tokens_details）
             if (response.aiMessage() != null && response.aiMessage().attributes() != null) {
                 int v = CachedTokenExtractor.extractFromNode(
                         objectMapper.valueToTree(response.aiMessage().attributes()));

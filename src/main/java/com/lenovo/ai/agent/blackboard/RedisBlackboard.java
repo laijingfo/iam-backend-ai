@@ -14,12 +14,10 @@ public class RedisBlackboard implements Blackboard {
     private static final String PREFIX = "ai:blackboard:";
     private static final long TTL_MINUTES = 30;
 
-    /** ★ 声明字段 */
     private final StringRedisTemplate redis;
     private final String boardId;
     private final ObjectMapper objectMapper;
 
-    /** ★ 唯一构造函数 */
     public RedisBlackboard(StringRedisTemplate redis, String boardId, ObjectMapper objectMapper) {
         this.redis = redis;
         this.boardId = boardId;
@@ -37,32 +35,32 @@ public class RedisBlackboard implements Blackboard {
 
     // ===== 任务区 =====
 
+    /**
+     * 投递子任务。
+     *
+     * <p>★ P0-5 修复：pending 用 Hash（field=taskId），删除用 HDEL，
+     * 天然幂等、O(1)，避免 List + LREM 因 JSON 序列化差异（字段顺序/空格）
+     * 匹配失败导致任务永远删不掉、后续 `pendingTasks()` 反复读到已完成任务。</p>
+     */
     @Override
     public void postTask(AgentTask task) {
-        redis.opsForList().rightPush(key("tasks:pending"), toJson(task));
-        redis.expire(key("tasks:pending"), TTL_MINUTES, TimeUnit.MINUTES);
+        String k = key("tasks:pending");
+        redis.opsForHash().put(k, task.taskId(), toJson(task));
+        redis.expire(k, TTL_MINUTES, TimeUnit.MINUTES);
     }
 
     @Override
     public List<AgentTask> pendingTasks() {
-        List<String> raw = redis.opsForList().range(key("tasks:pending"), 0, -1);
-        if (raw == null) return List.of();
-        return raw.stream()
-                .map(s -> fromJson(s, AgentTask.class))
+        return redis.opsForHash().values(key("tasks:pending")).stream()
+                .map(v -> fromJson(String.valueOf(v), AgentTask.class))
                 .filter(Objects::nonNull)
                 .toList();
     }
 
     @Override
     public void markTaskDone(String taskId, AgentResult result) {
-        // ★ 用 Hash 存储，避免 List 全量扫描
-        List<AgentTask> pending = pendingTasks();
-        for (AgentTask t : pending) {
-            if (t.taskId().equals(taskId)) {
-                redis.opsForList().remove(key("tasks:pending"), 1, toJson(t));
-                break;
-            }
-        }
+        // ★ P0-5 修复：HDEL 按 field 直接删，O(1)、幂等、不依赖 JSON 一致性
+        redis.opsForHash().delete(key("tasks:pending"), taskId);
         redis.opsForHash().put(key("tasks:done"), taskId, toJson(result));
         redis.expire(key("tasks:done"), TTL_MINUTES, TimeUnit.MINUTES);
     }
@@ -119,7 +117,7 @@ public class RedisBlackboard implements Blackboard {
 
     private String toJson(Object o) {
         try {
-            return objectMapper.writeValueAsString(o);   // ★ 用实例字段
+            return objectMapper.writeValueAsString(o);
         } catch (Exception e) {
             log.warn("blackboard toJson 失败", e);
             return "{}";
@@ -128,7 +126,7 @@ public class RedisBlackboard implements Blackboard {
 
     private <T> T fromJson(String s, Class<T> type) {
         try {
-            return objectMapper.readValue(s, type);      // ★ 用实例字段
+            return objectMapper.readValue(s, type);
         } catch (Exception e) {
             log.warn("blackboard fromJson 失败: {}", s, e);
             return null;

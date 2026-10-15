@@ -24,6 +24,17 @@ public class ContextBuilder {
     private final ChatHistoryStore history;
     private final SummaryService summaryService;
 
+    /**
+     * 业务时区。
+     * <p>默认锁定 Asia/Shanghai，避免服务器跑在 UTC 时"早上问日期回答昨天"。</p>
+     */
+    @Value("${ai.timezone:Asia/Shanghai}")
+    private String zoneId;
+
+    private static final DateTimeFormatter CN_DATE =
+            DateTimeFormatter.ofPattern("yyyy年M月d日");
+
+
     /** 兼容旧签名 */
     public List<Message> build(String sessionId, String newUserMsg, String longTermMemoryBlock) {
         return build(sessionId, newUserMsg, null, null, longTermMemoryBlock);
@@ -71,7 +82,9 @@ public class ContextBuilder {
             int splitIdx = dialog.size() - KEEP_RECENT_TURNS * 2;
             List<Message> old = dialog.subList(0, splitIdx);
             List<Message> recent = dialog.subList(splitIdx, dialog.size());
-            String summary = summaryService.summarize(old);
+
+            // ★ P0-1 修复：把 sessionId 传给 summarize，隔离缓存 key
+            String summary = summaryService.summarize(sessionId, old);
             if (summary != null && !summary.isBlank()) {
                 result.add(Message.assistant("[历史对话摘要]\n" + summary));
             }
@@ -91,15 +104,6 @@ public class ContextBuilder {
         return result;
     }
 
-    /**
-     * 业务时区。
-     * <p>默认锁定 Asia/Shanghai，避免服务器跑在 UTC 时"早上问日期回答昨天"。</p>
-     */
-    @Value("${ai.timezone:Asia/Shanghai}")
-    private String zoneId;
-
-    private static final DateTimeFormatter CN_DATE =
-            DateTimeFormatter.ofPattern("yyyy年M月d日");
 
     /**
      * 构建环境信息块：把"今天"作为确定性事实直接注入。
@@ -108,8 +112,6 @@ public class ContextBuilder {
      * 实测 GeneralAgent 会把这类问题归到"通用知识/闲聊"分支直接作答，
      * 于是凭训练数据编造一个日期。日期是确定性信息，
      * 直接注入 system 消息可以做到 100% 准确、零延迟、零 token 成本。</p>
-     *
-     * <p>同时给出 ISO 格式，方便模型在需要计算时直接引用。</p>
      */
     private String buildEnvBlock() {
         ZoneId z;

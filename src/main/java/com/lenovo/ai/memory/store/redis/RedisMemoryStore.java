@@ -237,8 +237,6 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         throw new IllegalStateException("原生 Lettuce 连接未初始化");
     }
 
-    // ===================== 保存 =====================
-
     @Override
     public void save(MemoryItem item) {
         String key = MemoryKeys.item(item.userId(), item.id());
@@ -246,7 +244,6 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         byte[] embeddingBytes = VectorUtils.toFloatBytes(item.embedding());
 
         try {
-//            writeFields((k, v) -> hsetBoth(keyBytes, k, v), item, embeddingBytes);
             writeFields(keyBytes, item, embeddingBytes);
             withCommands(
                     cmd -> cmd.expire(keyBytes, TTL_SECONDS),
@@ -268,11 +265,25 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         } catch (Exception e) {
             log.error(">>> 保存记忆辅助索引失败，回滚主数据, userId={}, id={}",
                     item.userId(), item.id(), e);
-            // ★ 回滚主数据
+
+            // ★ P0-4 修复：按逆序回滚所有已写入的部分，避免孤儿索引。
+            //   顺序：reverse → userSet → 主数据 Hash。
+            //   每一步独立 try-catch，保证前一步失败不阻塞后一步。
+            try {
+                stringRedisTemplate.delete(MemoryKeys.reverse(item.id()));
+            } catch (Exception re) {
+                log.error(">>> 回滚 reverse 失败, id={}", item.id(), re);
+            }
+            try {
+                stringRedisTemplate.opsForSet().remove(MemoryKeys.userSet(item.userId()), item.id());
+            } catch (Exception ue) {
+                log.error(">>> 回滚 userSet 失败, userId={}, id={}",
+                        item.userId(), item.id(), ue);
+            }
             try {
                 delBoth(keyBytes);
             } catch (Exception re) {
-                log.error(">>> 回滚主数据也失败, key={}", key, re);
+                log.error(">>> 回滚主数据失败, key={}", key, re);
             }
         }
     }
@@ -388,18 +399,6 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
         byte[] keyBytes = b(k);
         try {
             long now = System.currentTimeMillis();
-//            withCommands(
-//                    cmd -> {
-//                        cmd.hset(keyBytes, b(FIELD_INVALID), b("1"));
-//                        cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
-//                        return null;
-//                    },
-//                    cmd -> {
-//                        cmd.hset(keyBytes, b(FIELD_INVALID), b("1"));
-//                        cmd.hset(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
-//                        return null;
-//                    }
-//            );
             hsetBoth(keyBytes, b(FIELD_INVALID), b("1"));
             hsetBoth(keyBytes, b(FIELD_UPDATED), b(String.valueOf(now)));
         } catch (Exception e) {
@@ -777,7 +776,6 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
 
             Map<String, Object> fields = extractDocFields(doc);
 
-            // ★★★ 关键修复：先保存 score 对象
             Object scoreObj = fields.get(FIELD_SCORE);
 
             String uid = RedisBytes.asString(fields.get(FIELD_USER_ID));
@@ -792,14 +790,13 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
                 continue;
             }
 
-            // ★ 回查 Hash 补全，但保留 score
+            // 回查 Hash 补全，但保留 score
             String redisKey = RedisBytes.asString(fields.get(FIELD_REDIS_KEY));
             if (redisKey != null) {
                 Map<String, Object> hash = readHashNative(redisKey);
                 if (!hash.isEmpty()) {
                     hash.putIfAbsent(FIELD_USER_ID, uid);
                     hash.putIfAbsent(FIELD_ID, memoryId);
-                    // ★ 关键：保留 score
                     if (scoreObj != null) {
                         hash.put(FIELD_SCORE, scoreObj);
                     }
@@ -809,13 +806,15 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
 
             MemoryItem item = toItem(fields);
 
-            // 在 parseSearchHits 里：
             double rawScore = RedisBytes.asDouble(fields.get(FIELD_SCORE), 1.0);
 
-// ★ 新增：区分 distance / similarity
+            // ★ P0-2 修复：区分 distance / similarity
+            //   RediSearch COSINE 距离范围是 [0,2]，
+            //   1 - distance/2 才能得到 [1,-1] 的相似度（1=完全相同，0=正交，-1=完全相反）。
+            //   原实现 1 - distance 在 distance>1 时产出负值，让"相似度"语义失真。
             double similarity;
             if (SCORE_IS_DISTANCE) {
-                similarity = 1.0 - rawScore;
+                similarity = 1.0 - rawScore / 2.0;
             } else {
                 similarity = rawScore;
             }
@@ -824,7 +823,7 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
                 log.debug(">>> KNN rawScore={}, similarity={}, memoryId={}",
                         rawScore, similarity, memoryId);
             }
-            // ★ 修复：原实现此处重复 add 了两次，导致 topK=N 实际返回 2N 条两两相同的结果
+
             result.add(new MemoryHit(item, similarity));
         }
 

@@ -28,16 +28,20 @@ public class UserMemoryStore {
     /**
      * 精确去重闸的 TTL（天）。
      *
-     * <p><b>修复</b>：原值 100 天大于记忆本体 TTL（RedisMemoryStore.TTL_SECONDS = 90 天）。
-     * 记忆 90 天后过期消失，但 exactKey 仍存活约 10 天，
-     * 此期间相同内容再也存不进去，且没有任何补偿机制 —— 表现为"记忆静默丢失"。</p>
-     *
-     * <p>必须与记忆本体 TTL 一致或更短。</p>
+     * <p>必须与记忆本体 TTL（RedisMemoryStore.TTL_SECONDS = 90 天）一致或更短，
+     * 否则记忆过期消失后 exactKey 仍存活，相同内容再也存不进去 —— "记忆静默丢失"。</p>
      */
     private static final long EXACT_TTL_DAYS = 90;
 
-    /** 语义去重阈值：高于此分视为同一条 */
-    private static final double SEMANTIC_DUP_SCORE = 0.9;
+    /**
+     * 语义去重阈值：高于此分视为同一条。
+     *
+     * <p>★ P0-2 修复：COSINE 距离 d → 相似度 1 - d/2（RediSearch COSINE 距离范围 [0,2]）。
+     * 0.95 对应"距离 ≤ 0.1"，与旧实现的 0.9（错误地对应"距离 ≤ 0.1"）语义一致。
+     * 若希望放宽去重，可调到 0.93（距离 ≤ 0.14）。</p>
+     */
+    private static final double SEMANTIC_DUP_SCORE = 0.95;
+
     /** 召回阈值 */
     private static final double RECALL_MIN_SCORE = 0.0;
 
@@ -55,7 +59,6 @@ public class UserMemoryStore {
         String exactKey = PREFIX + "exact:" + id;
 
         // ★ ① 原子抢闸：setIfAbsent 成功才继续
-        //    这样并发下只有一个请求能走到后面，避免重复入库
         Boolean first = redis.opsForValue()
                 .setIfAbsent(exactKey, "1", EXACT_TTL_DAYS, TimeUnit.DAYS);
         if (Boolean.FALSE.equals(first)) {
@@ -63,44 +66,39 @@ public class UserMemoryStore {
             return;
         }
 
-        // ★ 从这里开始，任何中途失败都要回滚 exactKey
         boolean shouldRollback = true;
         try {
-            // ② 算 embedding
             List<Double> emb;
             try {
                 emb = embeddingClient.embed(content);
             } catch (Exception e) {
                 log.warn("[memory-save] embedding 失败，回滚 exactKey: content={}", content, e);
-                return;   // finally 里会回滚
+                return;
             }
             if (emb == null || emb.isEmpty()) {
                 log.warn("[memory-save] embedding 为空，回滚 exactKey: content={}", content);
-                return;   // finally 里会回滚
+                return;
             }
 
-            // ③ 语义去重
             List<MemoryHit> hits = memoryStore.searchHitsByUser(userId, emb, 1);
             if (!hits.isEmpty() && hits.get(0).score() >= SEMANTIC_DUP_SCORE) {
                 MemoryHit hit = hits.get(0);
                 memoryStore.save(hit.item().withHit());
                 log.info("[memory-save] 语义重复(score={}), 累加命中, 保留 exactKey",
                         hit.score());
-                shouldRollback = false;   // ★ 语义重复 = 已存在，保留 exactKey
+                shouldRollback = false;
                 return;
             }
 
-            // ④ 真正入库
             MemoryItem item = MemoryItem.of(userId, type, content.trim(), emb, importance);
             memoryStore.save(item);
 
             log.info("[memory-save] 保存成功: userId={}, type={}, content={}",
                     userId, type, content);
-            shouldRollback = false;   // ★ 成功，保留 exactKey
+            shouldRollback = false;
 
         } finally {
             if (shouldRollback) {
-                // ★ 中途失败：回滚 exactKey，允许下次重试
                 try {
                     redis.delete(exactKey);
                     log.warn("[memory-save] 已回滚 exactKey: id={}", id);

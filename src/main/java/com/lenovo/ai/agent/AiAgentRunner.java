@@ -16,6 +16,7 @@ import com.lenovo.ai.memory.facade.MemoryFacade;
 import com.lenovo.ai.memory.model.MemoryItem;
 import com.lenovo.ai.token.context.ContextTrimmer;
 import com.lenovo.ai.token.estimator.TokenEstimator;
+import com.lenovo.ai.token.exception.QuotaExceededException;
 import com.lenovo.ai.token.quota.TokenQuotaService;
 import com.lenovo.ai.tools.context.AiToolContext;
 import com.lenovo.entity.LenovoUser;
@@ -147,20 +148,28 @@ public class AiAgentRunner {
             List<Message> messages = trimContext(rawMessages);
 
             // ★ 单次请求配额校验（原先 checkSingleRequest 定义了却无人调用）
+            // ★ 单次请求配额校验
             try {
                 int estimated = estimateTokens(messages);
                 quotaService.checkSingleRequest(userId, estimated);
-            } catch (Exception e) {
-                log.warn(">>> 单次请求超限, userId={}, runId={}", userId, runId);
+            } catch (QuotaExceededException e) {
+                // ★ P0-7 修复：只捕获真正的配额异常；其他异常（NPE、Redis 抖动）
+                //   不应被当成"超限"，否则误报给用户。
+                log.warn(">>> 单次请求超限, userId={}, runId={}, reason={}",
+                        userId, runId, e.getReason());
                 safeSend(emitter, "error", Map.of(
                         "code", "QUOTA_EXCEEDED",
-                        "message", e.getMessage() == null ? "单次请求过大" : e.getMessage()));
+                        "message", e.getReason() == null ? "单次请求过大" : e.getReason()));
                 try {
                     history.appendAssistant(assistantMessageId, sessionId,
-                            "[" + e.getMessage() + "]");
+                            "[单次请求过大，已终止]");
                 } catch (Exception ignore) {}
                 emitter.complete();
                 return;
+            } catch (Exception e) {
+                // 非配额异常：记录日志，继续走，不要因为检查本身失败而终止对话
+                log.warn(">>> 单次配额检查失败，忽略继续: userId={}, runId={}",
+                        userId, runId, e);
             }
 
             Agent agent = agentRouter.route(new RoutingRequest(
@@ -244,14 +253,23 @@ public class AiAgentRunner {
     /** 带超时与降级的异步装配任务 */
     private CompletableFuture<String> supplyGuarded(java.util.function.Supplier<String> supplier,
                                                     String name) {
-        CompletableFuture<String> f = CompletableFuture
-                .supplyAsync(supplier, contextExecutor)
-                .orTimeout(CONTEXT_FETCH_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
-        return f.exceptionally(e -> {
-            log.warn(">>> 上下文装配[{}]失败或超时({}s)，降级为空",
-                    name, CONTEXT_FETCH_TIMEOUT_SECONDS, e);
-            return "";
-        });
+        // ★ P0-6 修复：线程池满时 supplyAsync 会在调用点抛 RejectedExecutionException，
+        //   这是"提交失败"而不是"任务失败"，exceptionally 捕获不到。
+        //   必须包一层 try-catch，否则整个对话挂掉。
+        try {
+            return CompletableFuture
+                    .supplyAsync(supplier, contextExecutor)
+                    .orTimeout(CONTEXT_FETCH_TIMEOUT_SECONDS,
+                            java.util.concurrent.TimeUnit.SECONDS)
+                    .exceptionally(e -> {
+                        log.warn(">>> 上下文装配[{}]失败或超时({}s)，降级为空",
+                                name, CONTEXT_FETCH_TIMEOUT_SECONDS, e);
+                        return "";
+                    });
+        } catch (Exception e) {
+            log.warn(">>> 上下文装配[{}]提交失败（线程池已满？），降级为空", name, e);
+            return CompletableFuture.completedFuture("");
+        }
     }
 
     private int estimateTokens(List<Message> messages) {

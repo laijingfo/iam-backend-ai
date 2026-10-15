@@ -26,11 +26,19 @@ public class SummaryService {
     private final LlmClient llmClient;
     private final RedisUtils redisUtils;
 
-    public String summarize(List<Message> messages) {
-        return summarize(messages, 200);
+    public String summarize(String sessionId, List<Message> messages) {
+        return summarize(sessionId, messages, 200);
     }
 
-    public String summarize(List<Message> messages, int maxWordSize) {
+    /**
+     * 生成对话摘要。
+     *
+     * @param sessionId   会话 ID，<b>必传</b>。用于隔离缓存 key，
+     *                    避免不同会话前缀相同时串号（不同用户看到别人的摘要）。
+     * @param messages    待摘要的历史消息
+     * @param maxWordSize 摘要字数上限
+     */
+    public String summarize(String sessionId, List<Message> messages, int maxWordSize) {
         if (messages == null || messages.isEmpty()) return "";
 
         String raw = messages.stream()
@@ -45,8 +53,11 @@ public class SummaryService {
         if (prefix.length() > PREFIX_MAX_CHARS) {
             prefix = prefix.substring(0, PREFIX_MAX_CHARS);
         }
-        String cacheKey = CACHE_PREFIX + DigestUtils.md5(prefix)
-                + ":len" + messages.size();   // 加长度，避免前缀相同但整体不同
+
+        // ★ P0-1 修复：把 sessionId 纳入 key，避免不同会话前缀相同时跨会话串号。
+        String keySource = (sessionId == null ? "" : sessionId) + "|" + prefix;
+        String cacheKey = CACHE_PREFIX + DigestUtils.md5(keySource)
+                + ":len" + messages.size();
 
         try {
             Object cached = redisUtils.get(cacheKey);
@@ -92,5 +103,18 @@ public class SummaryService {
         }
 
         return summary;
+    }
+
+
+    /** @deprecated 改用 {@link #summarize(String, List)}，旧签名无会话隔离 */
+    @Deprecated
+    public String summarize(List<Message> messages) {
+        return summarize(null, messages, 200);
+    }
+
+    /** @deprecated 改用 {@link #summarize(String, List, int)}，旧签名无会话隔离 */
+    @Deprecated
+    public String summarize(List<Message> messages, int maxWordSize) {
+        return summarize(null, messages, maxWordSize);
     }
 }
