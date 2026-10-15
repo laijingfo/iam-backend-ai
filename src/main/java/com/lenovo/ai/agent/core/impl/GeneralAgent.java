@@ -33,7 +33,7 @@ public class GeneralAgent extends AbstractAgent {
 
             ========== 关于其他用户 ==========
             system 消息里的"[用户提到的其他用户]"列出了用户问题中提到的其他人。
-            - 当用户问"lidd8 是谁"、"wangel2 的部门"时，答案就在那里，直接回答。
+            - 当用户问"lidd8 是谁"、"laijf2 的部门"时，答案就在那里，直接回答。
             - 不要把它们和当前登录用户混淆。
             - 如果提到的用户在列表里没有，调用 query_user_info 工具主动查。
 

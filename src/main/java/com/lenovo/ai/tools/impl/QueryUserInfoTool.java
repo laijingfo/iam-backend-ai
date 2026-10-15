@@ -44,7 +44,7 @@ public class QueryUserInfoTool implements AiTool {
                 "properties", Map.of(
                         "itCode", Map.of(
                                 "type", "string",
-                                "description", "员工的 itCode，如 laijf2、lidd8、wangel2")
+                                "description", "员工的 itCode，如 laijf2、lidd8")
                 ),
                 "required", List.of("itCode")
         );
@@ -53,7 +53,7 @@ public class QueryUserInfoTool implements AiTool {
     /** 所有登录用户都可查人；如需限制，改成 Set.of("USER", "ADMIN") */
     @Override
     public Set<String> allowedRoles() {
-        return Set.of("*");
+        return Set.of("USER","ADMIN","UAR_System_Admin_IT");
     }
 
     @Override

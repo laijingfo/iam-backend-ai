@@ -43,7 +43,7 @@ public class AiAgentRunner {
     /**
      * itCode 识别正则。
      * <p>匹配：4~20 位、字母开头、字母+数字。</p>
-     * <p>示例：lidd8、wangel2、laijf2、zhangsan01。</p>
+     * <p>示例：lidd8、laijf2、zhangsan01。</p>
      */
     private static final Pattern ITCODE_PATTERN =
             Pattern.compile("\\b([a-zA-Z][a-zA-Z0-9]{3,19})\\b");
@@ -222,7 +222,7 @@ public class AiAgentRunner {
     }
 
     // =====================================================================
-    //  ② 输入里提到的其他用户（lidd8、wangel2 等）
+    //  ② 输入里提到的其他用户（lidd8 等）
     // =====================================================================
 
     /**
