@@ -61,6 +61,8 @@ ai:
   knowledge-router:
     refresh-minutes: 10
     retry-backoff-millis: 60000
+    project-id: 79        # ★ 别再用默认 79
+    default-kb-id: 739418572585797   # ★ 强烈建议，等于给检索上保险
 
 token:
   enabled: true
@@ -85,3 +87,6 @@ token:
     BASIC:   { daily: 2000000,  monthly: 20000000,  max-request: 12000 }
     PREMIUM: { daily: 10000000, monthly: 100000000, max-request: 20000 }
     VIP:     { daily: -1,       monthly: -1,        max-request: 32000 }
+
+
+
