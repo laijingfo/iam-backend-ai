@@ -21,8 +21,6 @@ langchain4j:
     # LangChain4jConfig 的 @Value 读取（starter 自身配置在各模型块下）
     base-url: https://ws-h0yse1g5h37z1f9s.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
     api-key: sk-ws-H.PIYYERR.1Nwn.MEUCIElKdWigzoNh0Q0oyc4diloh1kPaG985KNHutJFYZ_BcAiEAxSEiKGkUToaPuDQXxyTjjvFHlw-ijplt7phf64Nt6EM
-    #    base-url: https://ws-g32z8buv16crgc1y.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-    #    api-key: sk-ws-H.PIRLYYH.JPuT.MEUCIQDHb9mXx_Wgp51sbDlNYHkbEcC5tvvj4rf04ZkWpeu4gwIgZrJqfZFtIsri91swwVj16yYY8id-JTc0ov6Fb8d_AgY
     #非流式对话模型
     chat-model:
       model-name: kimi-k2.6
@@ -45,8 +43,9 @@ langchain4j:
     timeout-seconds: 120
     # 失败重试次数（仅非流式模型支持，流式模型无此配置项）
     max-retries: 3
-    log-requests: true
-    log-responses: true
+    # ★ 生产默认关闭；dev 通过 LLM_LOG_REQUESTS=true 打开
+    log-requests: ${LLM_LOG_REQUESTS:true}
+    log-responses: ${LLM_LOG_RESPONSES:true}
 
 ai:
   model:
@@ -61,11 +60,12 @@ ai:
   knowledge-router:
     refresh-minutes: 10
     retry-backoff-millis: 60000
-    project-id: 79        # ★ 别再用默认 79
-    default-kb-id: 739418572585797   # ★ 强烈建议，等于给检索上保险
+    project-id: ${KB_PROJECT_ID:79}
+    default-kb-id: ${KB_DEFAULT_ID:739418572585797}
     default-embedding: Qwen3-Embedding-0.6B
     default-top-k: 10
-    it-code: laijf2
+    # ★ 改为服务账号，禁止个人 itCode
+    it-code: ${KB_IT_CODE:laijf2}
 
 token:
   enabled: true
@@ -77,13 +77,13 @@ token:
   estimator:
     type: heuristic
     # type: tiktoken      # 取消注释即启用精确估算
-
   cost:
-    kimi-k2.6:         { input: 0.012,  output: 0.012 }
-    qwen-turbo:        { input: 0.0003, output: 0.0006 }
-    qwen-plus:         { input: 0.0008, output: 0.002 }
-    qwen-max:          { input: 0.02,   output: 0.06 }
-    text-embedding-v3: { input: 0.0007, output: 0.0 }
+    kimi-k2.6:          { input: 0.012,  output: 0.012 }
+    qwen-plus:          { input: 0.0008, output: 0.002 }
+    qwen-plus-latest:   { input: 0.0008, output: 0.002 }   # ← 新增
+    qwen-turbo:         { input: 0.0003, output: 0.0006 }
+    qwen-max:           { input: 0.02,   output: 0.06 }
+    text-embedding-v3:  { input: 0.0007, output: 0.0 }
 
   quota:
     FREE:    { daily: 500000,   monthly: 5000000,   max-request: 8000 }

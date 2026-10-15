@@ -219,6 +219,13 @@ public class AiAgentRunner {
                     "code", "INTERNAL_ERROR",
                     "message", e.getMessage() == null ? "处理失败" : e.getMessage()));
         } finally {
+            // ★ P0 修复：清理 ThreadLocal，避免线程复用导致跨用户串号
+            try {
+                AiToolContext.clear();
+            } catch (Exception e) {
+                log.warn("AiToolContext.clear 失败", e);
+            }
+
             if (!delegateCompleted) {
                 try {
                     emitter.unmute();

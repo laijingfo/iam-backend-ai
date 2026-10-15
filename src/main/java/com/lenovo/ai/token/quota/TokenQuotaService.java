@@ -91,6 +91,10 @@ public class TokenQuotaService {
 
     public void checkSingleRequest(String userId, int estimatedTokens) {
         TokenQuota quota = loadQuota(userId);
+        // ★ P1 修复：禁用账户直接拒绝
+        if (!quota.enabled()) {
+            throw new QuotaExceededException(userId, "账户已禁用");
+        }
         if (estimatedTokens > quota.maxRequestTokens()) {
             throw new QuotaExceededException(userId,
                     "单次请求过大 (" + estimatedTokens + " > " + quota.maxRequestTokens() + ")");

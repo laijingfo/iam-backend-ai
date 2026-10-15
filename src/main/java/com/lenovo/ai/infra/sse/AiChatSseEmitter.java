@@ -1,11 +1,9 @@
 package com.lenovo.ai.infra.sse;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -25,190 +23,76 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class AiChatSseEmitter extends SseEmitter {
 
-    private static final long DEFAULT_TIMEOUT_MS = 300_000L;
+    /** ★ P0 修复：complete 幂等 */
+    private final AtomicBoolean completed = new AtomicBoolean(false);
 
-    /** 子视图专用：指向父（根）emitter；根 emitter 为 null */
-    private volatile AiChatSseEmitter parent;
-
-    private final AtomicBoolean closed = new AtomicBoolean(false);
-    private final CopyOnWriteArrayList<Runnable> closeCallbacks = new CopyOnWriteArrayList<>();
-
-    private volatile boolean muted = false;
+    /** 子视图模式：吞掉 done / complete */
+    private volatile boolean childView = false;
     private volatile boolean suppressComplete = false;
-
-    /** 静默 / 抑制标志 */
-    public void mute() { this.muted = true; }
-    public void unmute() { this.muted = false; }
-    public boolean isMuted() { return muted; }
-    public void setSuppressComplete(boolean b) { this.suppressComplete = b; }
-    public boolean isSuppressComplete() { return suppressComplete; }
+    private volatile boolean muted = false;
 
     public AiChatSseEmitter() {
-        super(DEFAULT_TIMEOUT_MS);
-    }
-
-    // ===================== 子视图 =====================
-
-    /**
-     * 创建子视图：delta / tool 等过程帧转发到根连接，
-     * done / complete 等终结帧被丢弃。
-     *
-     * <p>用于 Orchestrator 的子任务，避免"子任务 1 跑完就关闭整条 SSE"。</p>
-     */
-    public AiChatSseEmitter childView() {
-        AiChatSseEmitter view = new AiChatSseEmitter();
-        view.parent = this;
-        return view;
-    }
-
-    public boolean isChildView() { return parent != null; }
-
-    /** 沿 parent 链找到根 emitter */
-    private AiChatSseEmitter root() {
-        AiChatSseEmitter e = this;
-        int guard = 0;
-        while (e.parent != null && guard++ < 16) {
-            e = e.parent;
-        }
-        return e;
-    }
-
-    private final Object closeLock = new Object();
-
-    /**
-     * 注册关闭回调。
-     *
-     * <p><b>修复竞态</b>：入列与"是否已关闭"的判断必须在同一把锁内完成，
-     * 且入列后再于锁外执行，避免"回调入列后永远等不到 fire"的窗口。</p>
-     */
-    public void addCloseCallback(Runnable callback) {
-        if (callback == null) return;
-        boolean runNow = false;
-        synchronized (closeLock) {
-            if (closed.get()) {
-                runNow = true;
-            } else {
-                closeCallbacks.add(callback);
-            }
-        }
-        if (runNow) {
-            try { callback.run(); } catch (Exception ignored) {}
-        }
-    }
-
-    /**
-     * 统一关闭入口：底层连接只由根 emitter 真正关闭，子视图仅标记自身结束。
-     *
-     * @param err 非 null 表示异常结束（completeWithError）
-     */
-    private void doClose(Throwable err) {
-        if (!closed.compareAndSet(false, true)) return;
-
-        // ★ 子视图：不关闭底层连接，只走回调
-        if (parent != null) {
-            log.debug(">>> SSE 子视图结束（不关闭根连接）");
-            synchronized (closeLock) { fireCallbacks(); }
-            return;
-        }
-
-        try {
-            if (err != null) {
-                super.completeWithError(err);
-            } else {
-                super.complete();
-            }
-        } catch (Exception e) {
-            log.warn("SSE 关闭异常", e);
-        } finally {
-            // ★ fireCallbacks 必须在锁内，与 addCloseCallback 的入列互斥
-            synchronized (closeLock) {
-                fireCallbacks();
-            }
-        }
-    }
-
-    /** 兼容旧 API */
-    @Deprecated
-    public void setOnCloseCallback(Runnable callback) {
-        addCloseCallback(callback);
-    }
-
-    /**
-     * 是否已关闭。子视图返回根连接的状态，
-     * 这样 AgentLoop 能感知"用户已断开"并提前退出循环。
-     */
-    public boolean isClosed() {
-        return parent != null ? root().isClosed() : closed.get();
-    }
-
-    /** 触发所有回调（幂等，调用方需持 closeLock） */
-    private void fireCallbacks() {
-        for (Runnable cb : closeCallbacks) {
-            try { cb.run(); } catch (Exception e) {
-                log.warn("SSE close callback 异常", e);
-            }
-        }
-        closeCallbacks.clear();
-    }
-
-    // ===================== send =====================
-
-    public void send(String chunk) {
-        if (muted) return;
-        if (chunk == null || chunk.isEmpty()) return;
-        if (isClosed()) return;
-
-        if (parent != null) {
-            root().send(chunk);
-            return;
-        }
-        try {
-            super.send(SseEmitter.event()
-                    .name("delta")
-                    .data(chunk, MediaType.TEXT_PLAIN));
-        } catch (IOException | IllegalStateException e) {
-            log.warn("SSE send 失败: {}", e.getMessage());
-            doClose(null);   // ★ 修复：原实现只标记 closed，连接会挂到 300s 超时
-        }
-    }
-
-    public void send(String eventName, Object data) {
-        if (muted) return;
-        if (isClosed()) return;
-
-        String name = (eventName == null || eventName.isEmpty()) ? "message" : eventName;
-
-        // ★ 子视图：吞掉终结帧，过程帧转发给根
-        if (parent != null) {
-            if ("done".equals(name) || "complete".equals(name)) {
-                log.debug(">>> SSE 子视图吞掉终结帧: {}", name);
-                return;
-            }
-            root().send(name, data);
-            return;
-        }
-
-        try {
-            super.send(SseEmitter.event()
-                    .name(name)
-                    .data(data, MediaType.APPLICATION_JSON));
-        } catch (IOException | IllegalStateException e) {
-            log.warn("SSE send 失败: {}", e.getMessage());
-            doClose(null);
-        }
+        super(300_000L);   // 5 分钟超时
     }
 
     @Override
     public void complete() {
-        if (suppressComplete) {
-            log.debug(">>> SSE complete() 被抑制");
+        // ★ 幂等：重复调用直接返回
+        if (!completed.compareAndSet(false, true)) {
+            log.debug("[sse] complete() 重复调用，已忽略");
             return;
         }
-        doClose(null);
+        try {
+            super.complete();
+        } catch (Exception e) {
+            log.debug("[sse] complete 异常（可能已关闭）: {}", e.getMessage());
+        }
     }
 
     @Override
     public void completeWithError(Throwable ex) {
-        doClose(ex);
+        if (!completed.compareAndSet(false, true)) {
+            log.debug("[sse] completeWithError() 重复调用，已忽略");
+            return;
+        }
+        try {
+            super.completeWithError(ex);
+        } catch (Exception e) {
+            log.debug("[sse] completeWithError 异常: {}", e.getMessage());
+        }
+    }
+
+    /** 发送事件；已 complete 时静默跳过 */
+    public void send(String event, Object data) {
+        if (completed.get()) {
+            log.debug("[sse] 已 complete，跳过 send({})", event);
+            return;
+        }
+        if (muted) {
+            log.debug("[sse] 已 mute，跳过 send({})", event);
+            return;
+        }
+        // 子视图：吞掉 done / complete 类终结帧
+        if (childView && ("done".equals(event) || "complete".equals(event))) {
+            log.debug("[sse] childView 吞掉终结帧 {}", event);
+            return;
+        }
+        try {
+            super.send(SseEmitter.event().name(event).data(data));
+        } catch (IOException | IllegalStateException e) {
+            log.debug("[sse] send({}) 失败（可能已断开）: {}", event, e.getMessage());
+        }
+    }
+
+    public void mute() { this.muted = true; }
+    public void unmute() { this.muted = false; }
+    public void setSuppressComplete(boolean v) { this.suppressComplete = v; }
+    public boolean isClosed() { return completed.get(); }
+
+    /** 派生子视图（子任务用） */
+    public AiChatSseEmitter childView() {
+        AiChatSseEmitter child = new AiChatSseEmitter();
+        child.childView = true;
+        return child;
     }
 }

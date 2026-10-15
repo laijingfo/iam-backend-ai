@@ -115,19 +115,31 @@ public class AgentContext {
     public AgentContext fork(String instruction, boolean inheritHistory) {
         List<Message> sub = new ArrayList<>();
 
-        for (Message m : this.messages) {
+        // ★ P1 修复：inheritHistory 时跳过"当前轮最后一条 user"，
+        //   避免子任务出现两条连续 user（原始问题 + instruction）。
+        int lastUserIdx = -1;
+        if (inheritHistory) {
+            for (int i = this.messages.size() - 1; i >= 0; i--) {
+                if (this.messages.get(i).role() == MessageRole.USER) {
+                    lastUserIdx = i;
+                    break;
+                }
+            }
+        }
+
+        for (int i = 0; i < this.messages.size(); i++) {
+            Message m = this.messages.get(i);
             if (m.role() == MessageRole.SYSTEM) {
-                // ★ 继承父 ctx 的 system 消息（保留全局约束、身份卡片等）
                 sub.add(m);
             } else if (inheritHistory) {
-                // ★ 可选：继承历史对话，避免子任务丢失指代上下文
+                // 跳过当前轮最后一条 user
+                if (i == lastUserIdx) continue;
                 sub.add(m);
             }
         }
 
         sub.add(Message.user(instruction));
 
-        // ★ 子任务统一用哨兵 ID，不落库；由 Orchestrator 汇总后统一落主 ID
         AgentContext child = new AgentContext(sub, this.toolContext, this.emitter,
                 this.sessionId, NO_PERSIST_ID, this.runId, this.memoryId);
         child.setBlackboard(this.blackboard);

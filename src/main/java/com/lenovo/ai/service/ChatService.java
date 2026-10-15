@@ -29,16 +29,18 @@ public class ChatService {
                             List<ToolSpec> tools,
                             AiChatSseEmitter emitter) {
 
+        // ★ P1 修复：先落 user，与主链路 AiAgentRunner 一致。
+        //   这样 LLM 失败时用户消息也不会丢，且 buildContext 里 isAlreadyPresent 会跳过重复注入。
+        long userMessageId = chatHistoryStore.nextMessageId();
+        chatHistoryStore.appendUser(userMessageId, sessionId, userId, userMsg);
+
         // 1. 构建上下文
         List<Message> context = memoryFacade.buildContext(userId, sessionId, userMsg);
 
         // 2. 流式调用 LLM
         LlmResponse response = llmClient.chatStream(context, tools, emitter);
 
-        // 3. 落历史
-        long userMessageId = chatHistoryStore.nextMessageId();
-        chatHistoryStore.appendUser(userMessageId, sessionId, userId, userMsg);
-
+        // 3. 落 assistant
         long assistantMessageId = chatHistoryStore.nextMessageId();
         chatHistoryStore.appendAssistant(assistantMessageId, sessionId, response.content());
 

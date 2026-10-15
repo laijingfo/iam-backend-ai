@@ -138,25 +138,19 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
     }
 
     // ===================== 生命周期 =====================
-
     @PostConstruct
     public void init() {
+        // ★ P1 修复：以 embeddingModel 实际维度为准，避免配置写错导致索引/查询维度不一致
         try {
             int actualDim = embeddingModel.dimension();
-            if (actualDim != vectorDim) {
-                // ★ R1 修复：维度不匹配不再抛异常，只告警。
-                //   抛异常会让模型升级（如 1024 → 1536 维）时应用直接启动不了，
-                //   只能改配置重启，运维无法灰度/回滚。
-                //   改为告警后应用能正常启动，索引创建会因 DIM 不匹配失败，
-                //   由运维按提示重建索引即可。
-                log.error(">>> 向量维度不匹配：配置={}, 实际={}。" +
-                                "请修改 langchain4j.open-ai.embedding-model.dimension 后重启，" +
-                                "并重建 RediSearch 索引：FT.DROPINDEX {} DD",
+            if (actualDim > 0 && actualDim != vectorDim) {
+                log.error(">>> 向量维度不匹配：配置={}, 实际={}。以实际值为准并重建索引：" +
+                                "FT.DROPINDEX {} DD",
                         vectorDim, actualDim, INDEX_NAME);
+                this.vectorDim = actualDim;   // ← 关键：覆盖为实际维度
             }
             log.info(">>> 向量维度校验通过: {}", vectorDim);
         } catch (Exception e) {
-            // ★ R1 修复：校验本身失败（如 embedding 服务暂时不可用）也不阻塞启动
             log.error(">>> 向量维度校验失败（不阻塞启动）", e);
         }
         initNativeConnection();

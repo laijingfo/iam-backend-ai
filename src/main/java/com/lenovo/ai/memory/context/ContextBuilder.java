@@ -148,13 +148,21 @@ public class ContextBuilder {
 
     /**
      * 判断 newUserMsg 是否已经作为最后一条 user 消息存在。
-     * 只回看末尾若干条，避免长对话的 O(n) 全量比较。
+     *
+     * <p><b>★ 只看最后一条 user</b>：调用方（ChatService / AiAgentRunner）都是
+     * "先 appendUser 再 buildContext"，append 同步可读时，刚写的那条必然在末尾。
+     * 只看最后一条能避免"最后 4 条里有历史相同内容"导致的误判——
+     * 那种误判会让本轮消息被跳过，LLM 看到历史消息重复作答。</p>
+     *
+     * <p>若某条路径没先落库（append 失败或异步写），最后一条 user 是历史消息，
+     * 内容通常与 newUserMsg 不同 → 不跳过 → 注入本轮。宁可多注入一次也不漏。</p>
      */
     private boolean isAlreadyPresent(List<Message> messages, String newUserMsg) {
-        for (int i = messages.size() - 1; i >= 0 && i >= messages.size() - 4; i--) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
             Message m = messages.get(i);
             if (m.role() != com.lenovo.ai.llm.enums.MessageRole.USER) continue;
-            if (newUserMsg.equals(m.content())) return true;
+            // 找到最后一条 user 就返回，不再往前扫
+            return newUserMsg.equals(m.content());
         }
         return false;
     }

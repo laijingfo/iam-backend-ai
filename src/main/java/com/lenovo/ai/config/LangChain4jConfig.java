@@ -76,7 +76,8 @@ public class LangChain4jConfig {
 
     @Value("${langchain4j.http.log-responses:false}")
     private boolean logResponses;
-
+    @Value("${langchain4j.open-ai.embedding-model.dimension:1024}")
+    private int embeddingDimension;
     /**
      * 非流式 ChatModel：用于 MemoryExtractor 等需要完整响应的场景。
      * <p>挂载 CachedTokenListener 以捕获 cachedTokens（LangChain4j 默认不暴露）。</p>
@@ -124,6 +125,7 @@ public class LangChain4jConfig {
         return OpenAiEmbeddingModel.builder()
                 .httpClientBuilder(newHttpClientBuilder())
                 .baseUrl(baseUrl).apiKey(apiKey).modelName(embeddingModelName)
+                .dimensions(embeddingDimension)   // ★ P1 修复：显式传维度
                 .timeout(Duration.ofSeconds(timeoutSeconds))
                 .maxRetries(maxRetries)
                 .logRequests(logRequests).logResponses(logResponses)

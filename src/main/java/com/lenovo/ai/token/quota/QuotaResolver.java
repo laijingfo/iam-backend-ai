@@ -24,6 +24,8 @@ public class QuotaResolver {
         }
         long daily   = cfg.getDaily()   < 0 ? Long.MAX_VALUE : cfg.getDaily();
         long monthly = cfg.getMonthly() < 0 ? Long.MAX_VALUE : cfg.getMonthly();
-        return new TokenQuota(userId, tier, daily, monthly, cfg.getMaxRequest(), true);
+        // ★ P1 修复：maxRequest <= 0 时视为不限，避免配置 -1 导致所有请求被拒
+        int maxReq = cfg.getMaxRequest() <= 0 ? Integer.MAX_VALUE : cfg.getMaxRequest();
+        return new TokenQuota(userId, tier, daily, monthly, maxReq, true);
     }
 }
