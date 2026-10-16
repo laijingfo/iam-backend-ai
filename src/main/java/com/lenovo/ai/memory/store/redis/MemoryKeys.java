@@ -9,7 +9,10 @@ package com.lenovo.ai.memory.store.redis;
 public final class MemoryKeys {
 
     private static final String BASE = "ai:memory:";
-
+    /** 全局活跃用户集合：ai:memory:active_users */
+    public static String activeUsers() {
+        return BASE + "active_users";
+    }
     private MemoryKeys() {}
 
     /** 主数据：ai:memory:{userId}:{memoryId} */

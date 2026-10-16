@@ -113,6 +113,15 @@ public class TokenQuotaService {
 
         try {
             String tier = str(m.get("tier"));
+
+            // ★ P1-3 修复：显式检查 tier=DISABLED，避免"只改了 tier 没改 enabled"
+            //   的用户绕过禁用。Redis 里可能因为历史数据或人工调整导致
+            //   tier 和 enabled 不同步，这里以 tier 为准。
+            if (TokenQuota.TIER_DISABLED.equals(tier)) {
+                log.warn("[quota] 用户 {} tier=DISABLED，直接返回禁用", userId);
+                return new TokenQuota(userId, tier, 0, 0, 0, false);
+            }
+
             long dailyLimit = parseLong(m.get("dailyLimit"));
             long monthlyLimit = parseLong(m.get("monthlyLimit"));
             int maxReq = (int) parseLong(m.get("maxRequest"));

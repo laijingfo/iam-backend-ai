@@ -246,7 +246,7 @@ public class Orchestrator {
             log.warn(">>> Planner 输出为空, runId={}", ctx.runId());
             return List.of();
         }
-        json = TextUtils.stripCodeFence(json);
+        json = TextUtils.extractJsonArray(json);
         try {
             List<Map<String, Object>> raw = objectMapper.readValue(json,
                     new TypeReference<List<Map<String, Object>>>() {});

@@ -258,7 +258,6 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
             );
         } catch (Exception e) {
             log.error(">>> 保存记忆主数据失败, key={}", key, e);
-            // ★ P0-3：主数据都没写成功，exactKey 必须回滚 → 抛异常让上层感知
             throw new IllegalStateException("保存记忆主数据失败: " + key, e);
         }
 
@@ -270,30 +269,21 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
             stringRedisTemplate.expire(userSetKey, TTL_SECONDS, TimeUnit.SECONDS);
             stringRedisTemplate.opsForValue().set(reverseKey, item.userId(),
                     TTL_SECONDS, TimeUnit.SECONDS);
+
+            // ★ P1-6：维护全局活跃用户索引，供 MemoryDecayJob 使用
+            //   这是集群模式下唯一可靠的"活跃用户"来源
+            stringRedisTemplate.opsForSet().add(MemoryKeys.activeUsers(), item.userId());
+            // 活跃用户集合不设 TTL，由衰减任务负责清理长期不活跃的
         } catch (Exception e) {
             log.error(">>> 保存记忆辅助索引失败，回滚主数据, userId={}, id={}",
                     item.userId(), item.id(), e);
 
-            // 按逆序回滚：reverse → userSet → 主数据 Hash
-            try {
-                stringRedisTemplate.delete(MemoryKeys.reverse(item.id()));
-            } catch (Exception re) {
-                log.error(">>> 回滚 reverse 失败, id={}", item.id(), re);
-            }
-            try {
-                stringRedisTemplate.opsForSet().remove(MemoryKeys.userSet(item.userId()), item.id());
-            } catch (Exception ue) {
-                log.error(">>> 回滚 userSet 失败, userId={}, id={}",
-                        item.userId(), item.id(), ue);
-            }
-            try {
-                delBoth(keyBytes);
-            } catch (Exception re) {
-                log.error(">>> 回滚主数据失败, key={}", key, re);
-            }
+            // 逆序回滚
+            try { stringRedisTemplate.delete(MemoryKeys.reverse(item.id())); } catch (Exception re) {}
+            try { stringRedisTemplate.opsForSet().remove(MemoryKeys.userSet(item.userId()), item.id()); } catch (Exception ue) {}
+            try { stringRedisTemplate.opsForSet().remove(MemoryKeys.activeUsers(), item.userId()); } catch (Exception ae) {}
+            try { delBoth(keyBytes); } catch (Exception re) {}
 
-            // ★ P0-3 关键：回滚完成后必须抛异常，让 UserMemoryStore 感知失败，
-            //   从而回滚 exactKey。否则 exactKey 保留 90 天，同内容再也存不进去。
             throw new IllegalStateException("保存记忆辅助索引失败，已回滚主数据: " + key, e);
         }
     }
@@ -844,9 +834,23 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
     }
 
     // ===================== 活跃用户 =====================
-
     @Override
     public Set<String> getAllActiveUsers() {
+        // ★ P1-6 修复：优先从显式的活跃用户 Set 读，
+        //   集群模式下 Set 天然跨节点，不会像 SCAN 那样漏。
+        try {
+            Set<String> fromIndex = stringRedisTemplate.opsForSet()
+                    .members(MemoryKeys.activeUsers());
+            if (fromIndex != null && !fromIndex.isEmpty()) {
+                log.info(">>> 获取活跃用户成功（来自全局索引），共 {} 个", fromIndex.size());
+                return fromIndex;
+            }
+            log.warn(">>> 全局活跃用户索引为空，退化到 SCAN（仅单机模式可靠）");
+        } catch (Exception e) {
+            log.warn(">>> 读取全局活跃用户索引失败，退化到 SCAN", e);
+        }
+
+        // 退化路径：SCAN。集群模式下会漏，仅作为首次迁移的兜底。
         try {
             Set<String> activeUsers = new HashSet<>();
             ScanOptions scanOptions = ScanOptions.scanOptions()
@@ -872,7 +876,7 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
                 return null;
             });
 
-            log.info(">>> 获取活跃用户成功，共 {} 个", activeUsers.size());
+            log.info(">>> 获取活跃用户成功（SCAN），共 {} 个", activeUsers.size());
             return activeUsers;
         } catch (Exception e) {
             log.warn(">>> 获取活跃用户失败", e);

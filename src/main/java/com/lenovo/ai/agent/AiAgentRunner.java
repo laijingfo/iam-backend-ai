@@ -34,6 +34,7 @@ import java.util.concurrent.Executor;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import com.lenovo.ai.token.model.QuotaStatus;
 
 /**
  * 一次对话的主链路编排。
@@ -113,10 +114,38 @@ public class AiAgentRunner {
                     String token, AiChatSseEmitter emitter,
                     String runId, String requestId) {
 
-        boolean delegateCompleted = false;
+        // ★ P1-1 修复：终结帧所有权归下游
+        //   - 只要进入 agent/orchestrator.execute，后续所有终结帧（done/complete）都由它们负责；
+        //   - 若下游抛异常没发终结帧，由 catch 兜底；
+        //   - finally 只做资源清理，绝不 complete()，也不 unmute()。
+        boolean terminalOwnedByDelegate = false;
         try {
             log.info(">>> 本轮用户输入原文: [{}], userId={}, sessionId={}, runId={}, requestId={}",
                     request.message(), userId, sessionId, runId, requestId);
+
+            // ★ P1-7 修复：入口先做一次快速配额检查
+            //   原实现只在上下文装配后调 checkSingleRequest，用户超日/月配额时
+            //   仍然要等几秒装配才在 AgentLoop 里发现超限。
+            try {
+                QuotaStatus status = quotaService.check(userId);
+                if (status.exceeded()) {
+                    log.warn(">>> 入口配额超限, userId={}, runId={}, reason={}",
+                            userId, runId, status.reason());
+                    safeSend(emitter, "error", Map.of(
+                            "code", "QUOTA_EXCEEDED",
+                            "message", status.reason()));
+                    try {
+                        history.appendAssistant(assistantMessageId, sessionId,
+                                "[已超出 token 配额，对话终止]");
+                    } catch (Exception ignore) {}
+                    emitter.complete();
+                    return;
+                }
+            } catch (Exception e) {
+                // 非配额异常（Redis 抖动等）：记录，继续
+                log.warn(">>> 入口配额检查失败，忽略继续: userId={}, runId={}",
+                        userId, runId, e);
+            }
 
             safeSend(emitter, "meta", Map.of(
                     "runId", runId,
@@ -125,8 +154,7 @@ public class AiAgentRunner {
 
             history.appendUser(userMessageId, sessionId, userId, request.message());
 
-            // ★ 1~3 并行装配：身份卡片 / 提及用户 / 长期记忆
-            //   原先三者串行，首字延迟 = 三次 RT 之和；这里并行 + 各自超时降级
+            // 1~3 并行装配
             String userMessage = request.message();
 
             CompletableFuture<String> profileFuture = supplyGuarded(
@@ -140,21 +168,16 @@ public class AiAgentRunner {
             String mentionedBlock = mentionedFuture.join();
             String memoryBlock = memoryFuture.join();
 
-            // ★ 4. 分开注入（ContextBuilder 内部已处理本轮消息的重复注入）
-            //    memoryBlock 已在上面并行召回，这里直接传入，避免门面再召回一次
             List<Message> rawMessages = memoryFacade.buildContext(
                     userId, sessionId, userMessage, profileBlock, mentionedBlock, memoryBlock);
 
             List<Message> messages = trimContext(rawMessages);
 
-            // ★ 单次请求配额校验（原先 checkSingleRequest 定义了却无人调用）
-            // ★ 单次请求配额校验
+            // 单次请求配额校验
             try {
                 int estimated = estimateTokens(messages);
                 quotaService.checkSingleRequest(userId, estimated);
             } catch (QuotaExceededException e) {
-                // ★ P0-7 修复：只捕获真正的配额异常；其他异常（NPE、Redis 抖动）
-                //   不应被当成"超限"，否则误报给用户。
                 log.warn(">>> 单次请求超限, userId={}, runId={}, reason={}",
                         userId, runId, e.getReason());
                 safeSend(emitter, "error", Map.of(
@@ -167,7 +190,6 @@ public class AiAgentRunner {
                 emitter.complete();
                 return;
             } catch (Exception e) {
-                // 非配额异常：记录日志，继续走，不要因为检查本身失败而终止对话
                 log.warn(">>> 单次配额检查失败，忽略继续: userId={}, runId={}",
                         userId, runId, e);
             }
@@ -195,12 +217,14 @@ public class AiAgentRunner {
             boolean isMulti = MULTI_AGENT.equalsIgnoreCase(
                     requested == null ? "" : requested.trim());
 
+            // ★ P1-1：进入执行前就移交终结帧所有权
+            terminalOwnedByDelegate = true;
+
             if (isMulti || MULTI_AGENT.equals(agent.name())) {
                 orchestrator.execute(ctx);
             } else {
                 agent.execute(ctx);
             }
-            delegateCompleted = true;
 
             String assistantContent = history.loadAssistant(assistantMessageId);
             if (assistantContent == null || assistantContent.isBlank()) {
@@ -215,24 +239,38 @@ public class AiAgentRunner {
 
         } catch (Exception e) {
             log.error("AiAgentRunner 异常，runId={}", runId, e);
-            safeSend(emitter, "error", Map.of(
-                    "code", "INTERNAL_ERROR",
-                    "message", e.getMessage() == null ? "处理失败" : e.getMessage()));
+
+            // ★ P1-1：只有下游还没接管终结帧时，才由本层兜底发 error + complete
+            if (!terminalOwnedByDelegate) {
+                safeSend(emitter, "error", Map.of(
+                        "code", "INTERNAL_ERROR",
+                        "message", e.getMessage() == null ? "处理失败" : e.getMessage()));
+                try {
+                    emitter.unmute();
+                    emitter.setSuppressComplete(false);
+                    emitter.complete();
+                } catch (Exception ignored) {}
+            } else {
+                // 下游已接管终结帧，但下游异常了没发——只能兜底补一个
+                try {
+                    if (!emitter.isClosed()) {
+                        safeSend(emitter, "error", Map.of(
+                                "code", "INTERNAL_ERROR",
+                                "message", "处理失败"));
+                        emitter.unmute();
+                        emitter.setSuppressComplete(false);
+                        emitter.complete();
+                    }
+                } catch (Exception ignored) {}
+            }
         } finally {
-            // ★ P0 修复：清理 ThreadLocal，避免线程复用导致跨用户串号
+            // ★ P1-1：finally 只做资源清理，不碰 emitter
             try {
                 AiToolContext.clear();
             } catch (Exception e) {
                 log.warn("AiToolContext.clear 失败", e);
             }
 
-            if (!delegateCompleted) {
-                try {
-                    emitter.unmute();
-                    emitter.setSuppressComplete(false);
-                    emitter.complete();
-                } catch (Exception ignored) {}
-            }
             try {
                 redisLockHelper.unlock(lockKey, token);
             } catch (Exception e) {
@@ -400,7 +438,14 @@ public class AiAgentRunner {
 
     /**
      * 从文本里提取候选 itCode。
-     * <p>规则：4~20 位、字母开头、字母+数字组合；会过滤常见英文单词。</p>
+     *
+     * <p>★ P1-5 修复：原规则过宽，纯字母单词（"please"、"spring"）会被误判为 itCode，
+     * 每次提问都触发 1~3 次远程用户查询。收紧为：</p>
+     * <ul>
+     *   <li>字母开头</li>
+     *   <li><b>至少含 1 位数字</b>（真实 itCode 如 lidd8、laijf2、zhangsan01 都含数字）</li>
+     *   <li>长度 4~20</li>
+     * </ul>
      */
     private Set<String> extractItCodes(String text) {
         Set<String> result = new LinkedHashSet<>();
@@ -409,10 +454,14 @@ public class AiAgentRunner {
         Matcher m = ITCODE_PATTERN.matcher(text);
         while (m.find()) {
             String token = m.group(1);
-            // 过滤：必须包含数字，或长度 >= 5 且全字母
+
+            // ★ P1-5：必须含数字（真实 itCode 一定含数字）
             boolean hasDigit = token.chars().anyMatch(Character::isDigit);
-            boolean allLetter = token.chars().allMatch(Character::isLetter);
-            if (!hasDigit && !(allLetter && token.length() >= 5)) {
+            if (!hasDigit) {
+                continue;
+            }
+            // 全数字的直接排除（如时间戳、编号）
+            if (token.chars().allMatch(Character::isDigit)) {
                 continue;
             }
             if (isCommonWord(token)) continue;

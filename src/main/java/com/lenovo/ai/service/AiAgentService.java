@@ -84,8 +84,9 @@ public class AiAgentService {
                         activeBySession.remove(oldState.sessionId, oldState);
                     }
                     try {
-                        // ★ P1 修复：用 unlock(token) 而非 forceUnlock，
-                        //   避免误删已被新请求拿到的同名锁
+                        // ★ P1-2 修复：用 unlock(token) 而非 forceUnlock，
+                        //   避免误删已被 TTL 释放、又被其他请求拿到的同名锁。
+                        //   Lua 脚本会校验 value == token，不匹配时什么也不做。
                         redisLockHelper.unlock(oldState.lockKey, oldState.lockToken);
                     } catch (Exception e) {
                         log.warn("释放旧锁失败", e);

@@ -52,7 +52,7 @@ public class MemoryParser {
         log.info(">>> [记忆抽取] LLM 原始返回, rawLen={}, raw={}",
                 raw == null ? 0 : raw.length(), TextUtils.preview(raw));
 
-        String cleaned = TextUtils.stripCodeFence(raw);
+        String cleaned = TextUtils.extractJsonArray(raw);
         if (cleaned == null || cleaned.isBlank()) {
             log.warn(">>> [记忆抽取] stripCodeFence 后为空, raw={}", TextUtils.preview(raw));
             return Collections.emptyList();
