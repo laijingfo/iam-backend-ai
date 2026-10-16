@@ -9,6 +9,7 @@ import com.lenovo.ai.agent.core.Agent;
 import com.lenovo.ai.agent.core.AgentRegistry;
 import com.lenovo.ai.agent.loop.AgentContext;
 import com.lenovo.ai.infra.history.ChatHistoryStore;
+import com.lenovo.ai.infra.sse.AiChatSseEmitter;
 import com.lenovo.ai.llm.Message;
 import com.lenovo.ai.memory.util.TextUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -76,8 +77,8 @@ public class Orchestrator {
         for (AgentTask t : tasks) board.postTask(t);
 
         // =========================================================
-        // 2. 逐个执行子任务（子任务可见 delta，但不发终结帧）
-        // =========================================================
+// 2. 逐个执行子任务（子任务可见 delta，但不发终结帧）
+// =========================================================
         long startedAt = System.currentTimeMillis();
         List<AgentResult> results = new ArrayList<>();
         for (AgentTask task : board.pendingTasks()) {
@@ -106,9 +107,18 @@ public class Orchestrator {
                 log.info(">>> 子任务执行: agent={}, taskId={}, instruction={}",
                         worker.name(), task.taskId(), preview(task.instruction()));
 
-                // ★ 子任务：继承历史 + 挂子视图 emitter + 哨兵 messageId（不落库）
+                // ★ P0-1 修复：子任务必须对前端可见。
+                //   父 ctx 的 streamToUser 被 AiAgentRunner 置为 planner 的 false，
+                //   fork 会继承这个 false，导致 worker 的 AbstractAgent 算出
+                //   stream = worker.streamToUser() && sub.streamToUser() = false，
+                //   子任务的 delta 全被静默，用户在多 Agent 模式下看不到任何中间过程。
+                //   这里显式恢复可见性。
                 AgentContext sub = ctx.fork(task.instruction(), true);
-                sub.setEmitter(ctx.emitter().childView());
+                sub.setStreamToUser(true);
+                AiChatSseEmitter childView = ctx.emitter().childView();
+                childView.unmute();                       // ★ 子视图本身也要 unmute
+                childView.setSuppressComplete(true);      // ★ 子任务不发终结帧
+                sub.setEmitter(childView);
 
                 worker.execute(sub);
 

@@ -80,12 +80,13 @@ public class AiAgentService {
             if (oldRequestId != null && !oldRequestId.equals(requestId)) {
                 RequestState oldState = requestsById.remove(oldRequestId);
                 if (oldState != null) {
-                    // ★ P2 修复：用 oldState.sessionId，与 cleanup 一致
                     if (oldState.sessionId != null) {
                         activeBySession.remove(oldState.sessionId, oldState);
                     }
                     try {
-                        redisLockHelper.forceUnlock(oldState.lockKey);
+                        // ★ P1 修复：用 unlock(token) 而非 forceUnlock，
+                        //   避免误删已被新请求拿到的同名锁
+                        redisLockHelper.unlock(oldState.lockKey, oldState.lockToken);
                     } catch (Exception e) {
                         log.warn("释放旧锁失败", e);
                     }
@@ -102,17 +103,19 @@ public class AiAgentService {
                 }
             }
 
-            // 3. 注册请求状态
+            // 3. 注册请求状态（★ P0-2：activeBySession 挪到锁成功后再注册）
             RequestState state = new RequestState(
                     requestId, runId, memoryId, sessionId, lockToken, lockKey, emitter);
             requestsById.put(requestId, state);
             activeByMemory.put(memoryId, requestId);
-            activeBySession.put(sessionId, state);
+            // ★ activeBySession 不在这里 put —— 见下方 tryLock 之后
 
             // 4. 加锁
             boolean locked = redisLockHelper.tryLock(lockKey, lockToken, 300_000L);
             if (!locked) {
                 log.error(">>> 锁冲突: memoryId={}", memoryId);
+                // ★ P0-2 修复：锁失败时 activeBySession 尚未写入当前 state，
+                //   cleanup 不会误删旧请求的映射。旧请求仍可被 stop(sessionId) 停止。
                 cleanup(requestId);
                 try {
                     emitter.send(SseEmitter.event().name("error")
@@ -121,12 +124,17 @@ public class AiAgentService {
                 emitter.complete();
                 return emitter;
             }
+            // ★ P0-2：锁成功后才注册 session 映射
+            activeBySession.put(sessionId, state);
+
             log.info(">>> 成功获取锁: memoryId={}, requestId={}, runId={}",
                     memoryId, requestId, runId);
 
-            // 5. 会话初始化
+            // 5. 会话初始化（★ 这段之前丢了，必须补回）
             boolean newSession = !history.exists(sessionId);
-            if (!newSession) history.assertOwner(sessionId, userId);
+            if (!newSession) {
+                history.assertOwner(sessionId, userId);
+            }
 
             AiToolContext context = AiToolContext.capture(userId, redisUtils);
             long userMessageId = history.nextMessageId();
@@ -139,8 +147,6 @@ public class AiAgentService {
             });
 
             // 7. 提交线程池
-            // ★ 修复：改用 submit(Runnable)，队列满时返回 false 并友好提示，
-            //   不再依赖 @Deprecated 的 execute() 抛 RejectedExecutionException
             boolean accepted = chatExecutor.submit(() -> runner.run(
                     request, context, userId, sessionId,
                     userMessageId, assistantMessageId,
@@ -249,4 +255,5 @@ public class AiAgentService {
             }
         }
     }
+
 }

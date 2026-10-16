@@ -91,7 +91,16 @@ public class UserMemoryStore {
             }
 
             MemoryItem item = MemoryItem.of(userId, type, content.trim(), emb, importance);
-            memoryStore.save(item);
+
+            // ★ P0-3 修复：memoryStore.save 失败时会抛异常（见 RedisMemoryStore.save），
+            //   这里 catch 后 return，finally 里 shouldRollback 仍为 true → 回滚 exactKey。
+            //   原实现依赖 memoryStore.save 静默返回，导致 exactKey 永久占用。
+            try {
+                memoryStore.save(item);
+            } catch (Exception e) {
+                log.warn("[memory-save] 存储失败，将回滚 exactKey: content={}", content, e);
+                return;
+            }
 
             log.info("[memory-save] 保存成功: userId={}, type={}, content={}",
                     userId, type, content);

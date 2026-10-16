@@ -64,43 +64,68 @@ public class ContextTrimmer {
             historyBudget = 0;
         }
 
-        // ④ 从后往前保留，且保证 assistant(tool_calls) + tool 成对
+        // ④ 从后往前保留，且保证 assistant(tool_calls) + 后续所有 TOOL 成对
         Deque<Message> kept = new ArrayDeque<>();
         int keptTokens = 0;
         if (history != null) {
-            for (int i = history.size() - 1; i >= 0; i--) {
+            int i = history.size() - 1;
+            while (i >= 0) {
                 Message m = history.get(i);
                 int t = estimator.estimate(m.content());
 
-                // 若本条是 TOOL，且其配对的 assistant 也要一起保留
+                // ★ P0-4 修复：遇到 TOOL 时，向前找到最近的 assistant，
+                //   把 [assistant, ...所有连续 TOOL] 作为一个原子块处理。
+                //   原实现逐个 TOOL 判断前一条是否 assistant，遇到
+                //   assistant(tool_calls=[A,B]) + tool(A) + tool(B) 这种结构时
+                //   tool(B) 前一条是 tool(A)，会被跳过，导致 assistant 与 TOOL 不配对。
                 if (m.role() == MessageRole.TOOL) {
-                    // TOOL 前面必须紧跟 assistant(tool_calls)
-                    if (i == 0 || history.get(i - 1).role() != MessageRole.ASSISTANT) {
+                    // 向前找到最近的 assistant
+                    int assistantIdx = i - 1;
+                    while (assistantIdx >= 0
+                            && history.get(assistantIdx).role() == MessageRole.TOOL) {
+                        assistantIdx--;
+                    }
+                    if (assistantIdx < 0
+                            || history.get(assistantIdx).role() != MessageRole.ASSISTANT) {
                         log.warn("[context-trim] TOOL 消息缺少配对 assistant，跳过");
+                        i--;   // 单条跳过，继续往前
                         continue;
                     }
-                    Message pair = history.get(i - 1);
-                    int pairTokens = t + estimator.estimate(pair.content());
-                    if (keptTokens + pairTokens > historyBudget) break;
-                    kept.addFirst(m);
-                    kept.addFirst(pair);
-                    keptTokens += pairTokens;
-                    i--; // 跳过已处理的 assistant
+
+                    // 整块 token = assistant + 它后面所有 TOOL
+                    int blockTokens = 0;
+                    for (int k = assistantIdx; k <= i; k++) {
+                        blockTokens += estimator.estimate(history.get(k).content());
+                    }
+                    if (keptTokens + blockTokens > historyBudget) {
+                        // 整块放不下 → 整块丢弃，直接结束（前面的更放不下）
+                        break;
+                    }
+                    // 从后往前 addFirst，保持原顺序
+                    for (int k = i; k >= assistantIdx; k--) {
+                        kept.addFirst(history.get(k));
+                    }
+                    keptTokens += blockTokens;
+                    i = assistantIdx - 1;   // 跳过整块
                     continue;
                 }
 
+                // 普通消息（USER / ASSISTANT 无 tool_calls）
                 if (keptTokens + t > historyBudget) break;
                 kept.addFirst(m);
                 keptTokens += t;
+                i--;
             }
         }
 
-        // ⑤ 若首条是 assistant（配对断裂），丢弃它及其后紧跟的 TOOL
+// ⑤ 若首条是 assistant，说明配对断裂（它声明的 tool_calls 的 TOOL 被裁掉了），
+//    丢弃它；若其后面还跟着 TOOL，也一并丢弃。
+//    ★ P0-4：这里改为"循环丢弃直到首条不是 assistant"，
+//    且丢弃 assistant 后若紧跟 TOOL，也丢弃（防御性，正常不会出现）。
         while (!kept.isEmpty() && kept.peekFirst().role() == MessageRole.ASSISTANT) {
             Message dropped = kept.pollFirst();
             keptTokens -= estimator.estimate(dropped.content());
             log.debug("[context-trim] 丢弃配对断裂的 assistant 消息");
-            // 丢弃后若紧跟 TOOL，也一并丢弃
             while (!kept.isEmpty() && kept.peekFirst().role() == MessageRole.TOOL) {
                 Message tool = kept.pollFirst();
                 keptTokens -= estimator.estimate(tool.content());

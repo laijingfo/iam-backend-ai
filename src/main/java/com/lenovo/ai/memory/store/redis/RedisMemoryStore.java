@@ -258,7 +258,8 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
             );
         } catch (Exception e) {
             log.error(">>> 保存记忆主数据失败, key={}", key, e);
-            return;
+            // ★ P0-3：主数据都没写成功，exactKey 必须回滚 → 抛异常让上层感知
+            throw new IllegalStateException("保存记忆主数据失败: " + key, e);
         }
 
         try {
@@ -273,9 +274,7 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
             log.error(">>> 保存记忆辅助索引失败，回滚主数据, userId={}, id={}",
                     item.userId(), item.id(), e);
 
-            // ★ P0-4 修复：按逆序回滚所有已写入的部分，避免孤儿索引。
-            //   顺序：reverse → userSet → 主数据 Hash。
-            //   每一步独立 try-catch，保证前一步失败不阻塞后一步。
+            // 按逆序回滚：reverse → userSet → 主数据 Hash
             try {
                 stringRedisTemplate.delete(MemoryKeys.reverse(item.id()));
             } catch (Exception re) {
@@ -292,6 +291,10 @@ public class RedisMemoryStore implements MemoryStore, MemoryMaintenanceStore {
             } catch (Exception re) {
                 log.error(">>> 回滚主数据失败, key={}", key, re);
             }
+
+            // ★ P0-3 关键：回滚完成后必须抛异常，让 UserMemoryStore 感知失败，
+            //   从而回滚 exactKey。否则 exactKey 保留 90 天，同内容再也存不进去。
+            throw new IllegalStateException("保存记忆辅助索引失败，已回滚主数据: " + key, e);
         }
     }
 
