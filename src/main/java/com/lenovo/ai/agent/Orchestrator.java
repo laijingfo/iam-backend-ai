@@ -15,11 +15,7 @@ import com.lenovo.ai.memory.util.TextUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.UUID;
+import java.util.*;
 
 /**
  * 多 Agent 编排：Planner → 循环 Executor → Synthesizer。
@@ -77,16 +73,17 @@ public class Orchestrator {
         for (AgentTask t : tasks) board.postTask(t);
 
         // =========================================================
-// 2. 逐个执行子任务（子任务可见 delta，但不发终结帧）
-// =========================================================
+        // 2. 逐个执行子任务（子任务可见 delta，但不发终结帧）
+        // =========================================================
         long startedAt = System.currentTimeMillis();
         List<AgentResult> results = new ArrayList<>();
         for (AgentTask task : board.pendingTasks()) {
             Agent worker = registry.get(task.agentName());
             if (worker == null) {
                 log.warn(">>> 未知 Agent: {}, taskId={}", task.agentName(), task.taskId());
+                Map<String, Object> meta = Map.of("reason", "unknown_agent");
                 AgentResult r = new AgentResult(task.taskId(), "unknown", false,
-                        "无此 Agent: " + task.agentName(), Map.of());
+                        "无此 Agent: " + task.agentName(), meta);
                 board.markTaskDone(task.taskId(), r);
                 results.add(r);
                 continue;
@@ -96,8 +93,9 @@ public class Orchestrator {
             if (System.currentTimeMillis() - startedAt > SUBTASK_BUDGET_MS) {
                 log.warn(">>> 子任务整体预算耗尽({}ms)，跳过剩余任务: runId={}, taskId={}",
                         SUBTASK_BUDGET_MS, ctx.runId(), task.taskId());
+                Map<String, Object> meta = Map.of("skipped", true, "reason", "budget_exhausted");
                 AgentResult r = new AgentResult(task.taskId(), worker.name(), false,
-                        "执行超时（整体预算耗尽）", Map.of());
+                        "执行超时（整体预算耗尽）", meta);
                 board.markTaskDone(task.taskId(), r);
                 results.add(r);
                 continue;
@@ -107,29 +105,33 @@ public class Orchestrator {
                 log.info(">>> 子任务执行: agent={}, taskId={}, instruction={}",
                         worker.name(), task.taskId(), preview(task.instruction()));
 
-                // ★ P0-1 修复：子任务必须对前端可见。
-                //   父 ctx 的 streamToUser 被 AiAgentRunner 置为 planner 的 false，
-                //   fork 会继承这个 false，导致 worker 的 AbstractAgent 算出
-                //   stream = worker.streamToUser() && sub.streamToUser() = false，
-                //   子任务的 delta 全被静默，用户在多 Agent 模式下看不到任何中间过程。
-                //   这里显式恢复可见性。
                 AgentContext sub = ctx.fork(task.instruction(), true);
                 sub.setStreamToUser(true);
                 AiChatSseEmitter childView = ctx.emitter().childView();
-                childView.unmute();                       // ★ 子视图本身也要 unmute
-                childView.setSuppressComplete(true);      // ★ 子任务不发终结帧
+                childView.unmute();
+                childView.setSuppressComplete(true);
                 sub.setEmitter(childView);
 
+                long start = System.currentTimeMillis();
                 worker.execute(sub);
+                long costMs = System.currentTimeMillis() - start;
 
-                AgentResult r = new AgentResult(task.taskId(), worker.name(), true,
-                        sub.lastAssistantContent(), Map.of());
+                String output = sub.lastAssistantContent();
+
+                // ★ P2-5：填充诊断 meta
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("costMs", costMs);
+                meta.put("outputLen", output == null ? 0 : output.length());
+                // 可扩展：工具调用次数、token 消耗等
+
+                AgentResult r = new AgentResult(task.taskId(), worker.name(), true, output, meta);
                 board.markTaskDone(task.taskId(), r);
                 results.add(r);
             } catch (Exception e) {
                 log.error(">>> 子任务执行失败: taskId={}", task.taskId(), e);
+                Map<String, Object> meta = Map.of("errorType", e.getClass().getSimpleName());
                 AgentResult r = new AgentResult(task.taskId(), worker.name(), false,
-                        e.getMessage(), Map.of());
+                        e.getMessage(), meta);
                 board.markTaskDone(task.taskId(), r);
                 results.add(r);
             }

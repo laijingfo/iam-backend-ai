@@ -5,6 +5,7 @@ import com.lenovo.ai.infra.sse.AiChatSseEmitter;
 import com.lenovo.ai.llm.LlmClient;
 import com.lenovo.ai.llm.LlmResponse;
 import com.lenovo.ai.llm.Message;
+import com.lenovo.ai.llm.enums.MessageRole;
 import com.lenovo.ai.token.counter.TokenCounter;
 import com.lenovo.ai.token.model.QuotaStatus;
 import com.lenovo.ai.token.model.TokenUsage;
@@ -145,13 +146,9 @@ public class AgentLoop {
                 // ==================================================
                 // ★ LLM 调用失败：不再静默成空答案
                 // ==================================================
-                // ==================================================
-                // ★ LLM 调用失败：不再静默成空答案
-                // ==================================================
                 if (resp.isFailed()) {
                     Throwable cause = resp.error();
-                    // ★ R4 补充：失败响应可能携带已解析出的 toolCalls，
-                    //   仅记录用于诊断，不执行（失败意味着本次调用不可靠）。
+                    // 失败响应可能携带已解析出的 toolCalls，仅记录用于诊断，不执行
                     log.error(">>> LLM 调用失败, runId={}, agent={}, step={}, " +
                                     "已解析 toolCalls={}, 已产出内容长度={}",
                             ctx.runId(), ctx.agentName(), step,
@@ -238,8 +235,13 @@ public class AgentLoop {
             // ==================================================
             // 达到最大步数
             // ==================================================
-            replaceMessages(ctx.messages(), messages);
-            persist(ctx, "[已达到最大工具调用步数]");
+                        replaceMessages(ctx.messages(), messages);
+            // 若最后一步 LLM 已产出部分内容，保留它，只追加提示
+            String lastContent = lastAssistantContent(messages);
+            String finalText = (lastContent == null || lastContent.isBlank())
+                    ? "[已达到最大工具调用步数]"
+                    : lastContent + "\n\n[已达到最大工具调用步数，回答可能不完整]";
+            persist(ctx, finalText);
             sendEvent(ctx.emitter(), "done", Map.of("messageId", ctx.assistantMessageId()));
             ctx.emitter().complete();
 
@@ -337,5 +339,16 @@ public class AgentLoop {
             default -> name;
         };
         emitter.send(frontendEventName, data);
+    }
+
+    private String lastAssistantContent(List<Message> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            Message m = messages.get(i);
+            if (m.role() == MessageRole.ASSISTANT
+                    && m.content() != null && !m.content().isBlank()) {
+                return m.content();
+            }
+        }
+        return "";
     }
 }

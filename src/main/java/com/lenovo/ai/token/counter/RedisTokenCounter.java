@@ -43,17 +43,24 @@ public class RedisTokenCounter implements TokenCounter {
                        String modelName, TokenUsage usage) {
         if (!properties.isEnabled() || usage == null || usage.totalTokens() <= 0) return;
 
+        // ★ P2-6 修复：modelName 为 null 时兜底为 "unknown"，
+        //   避免 hIncrBy 里 getBytes NPE 导致整条计数丢失。
+        //   注意：不能直接给参数 modelName 重新赋值，否则 Lambda 无法捕获。
+        final String safeModelName = (modelName == null || modelName.isBlank())
+                ? "unknown"
+                : modelName;
+
         try {
             // ★ P2 修复：统一取一次 now，所有 key 用它，避免跨午夜归属不一致
             LocalDate today = LocalDate.now();
 
-            double cost = costCalculator.calculate(modelName, usage);
+            double cost = costCalculator.calculate(safeModelName, usage);
             long costMicro = Math.round(cost * TokenRedisKeys.MICRO_CNY);
 
             TokenUsageRecord rec = TokenUsageRecord.builder()
                     .recordId(UUID.randomUUID().toString())
                     .userId(userId).sessionId(sessionId).runId(runId)
-                    .modelName(modelName)
+                    .modelName(safeModelName)
                     .inputTokens(usage.inputTokens())
                     .outputTokens(usage.outputTokens())
                     .totalTokens(usage.totalTokens())
@@ -71,6 +78,9 @@ public class RedisTokenCounter implements TokenCounter {
             String costMon  = TokenRedisKeys.costMonth(userId, today);
             String recKey   = TokenRedisKeys.recordsDay(userId, today);
 
+            // Lambda 捕获的变量必须是 effectively final
+            final byte[] modelNameBytes = safeModelName.getBytes(StandardCharsets.UTF_8);
+
             List<Object> results = redis.executePipelined((RedisCallback<Object>) connection -> {
                 byte[] dayKeyB   = dayKey.getBytes(StandardCharsets.UTF_8);
                 byte[] monthKeyB = monthKey.getBytes(StandardCharsets.UTF_8);
@@ -85,8 +95,8 @@ public class RedisTokenCounter implements TokenCounter {
                 connection.hIncrBy(costDayB, FIELD_COST_B, costMicro);
                 connection.hIncrBy(costMonB, FIELD_COST_B, costMicro);
 
-                connection.hIncrBy(modelKeyB, modelName.getBytes(StandardCharsets.UTF_8),
-                        usage.totalTokens());
+                // ★ 用预先算好的 modelNameBytes，避免在 Lambda 里再调 getBytes
+                connection.hIncrBy(modelKeyB, modelNameBytes, usage.totalTokens());
 
                 connection.lPush(recKeyB, recJson.getBytes(StandardCharsets.UTF_8));
                 connection.lTrim(recKeyB, 0, MAX_RECORDS_PER_DAY - 1);
@@ -110,13 +120,13 @@ public class RedisTokenCounter implements TokenCounter {
             }
 
             try {
-                tokenMetrics.recordUsage(userId, modelName, usage, cost);
+                tokenMetrics.recordUsage(userId, safeModelName, usage, cost);
             } catch (Exception me) {
                 log.warn("[token-record] 指标上报失败", me);
             }
 
             log.info("[token-record] userId={}, model={}, in={}, out={}, cached={}, cost=¥{}",
-                    userId, modelName, usage.inputTokens(), usage.outputTokens(),
+                    userId, safeModelName, usage.inputTokens(), usage.outputTokens(),
                     usage.cachedTokens(), String.format("%.6f", cost));
         } catch (Exception e) {
             log.error("[token-record] 记录失败: userId={}, model={}", userId, modelName, e);

@@ -1,16 +1,13 @@
 package com.lenovo.ai.token.estimator;
 
-
 /**
- * @author laifo
- * @version 1.0
- * @date 2026-10-13 10:59
- * @project iam-backend-ai
- * @description
- * 启发式估算：中文 1.5 token/字，英文 1 token/4 字符，数字/标点按 1 token/3 字符
+ * 启发式估算：中文 1.5 token/字，英文 1 token/4 字符，数字/标点按 1 token/3 字符。
+ *
+ * <p><b>装配方式</b>：本类不直接加 {@code @Component}，由
+ * {@link TokenEstimatorConfig#heuristicTokenEstimator()} 显式注册。
+ * 原因是 {@code @ConditionalOnMissingBean} 在 {@code @Component} 上
+ * 评估时机不确定，可能导致 Bean 被跳过。</p>
  */
-//@Component
-//@ConditionalOnMissingBean(TokenEstimator.class)
 public class HeuristicTokenEstimator implements TokenEstimator {
 
     @Override
@@ -22,7 +19,6 @@ public class HeuristicTokenEstimator implements TokenEstimator {
             else if (Character.isDigit(c)) digit++;
             else other++;
         }
-        // 数字串（如 ID、时间戳）token 密度高，按 1 token/2.5 字符
         return (int) Math.ceil(chinese * 1.5 + digit / 2.5 + other / 4.0);
     }
 

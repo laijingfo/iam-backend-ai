@@ -84,7 +84,10 @@ public class MemoryParser {
 
         List<Map<String, Object>> valid = items.stream()
                 .filter(this::isValidItem)
-                .peek(this::normalizeItem)
+                .map(it -> {
+                    normalizeItem(it);
+                    return it;
+                })
                 .collect(Collectors.toList());
 
         // ★ P2 修复：同一轮内按 (type, content) 去重。
